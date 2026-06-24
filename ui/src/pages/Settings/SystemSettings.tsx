@@ -72,7 +72,7 @@ export default function SystemSettingsPage() {
 												className="ms-1 text-secondary cursor-pointer"
 												onClick={() =>
 													showHelpModal(
-														"SystemSettings:ACMEEmail",
+														"SystemSettings",
 														"lime",
 													)
 												}
