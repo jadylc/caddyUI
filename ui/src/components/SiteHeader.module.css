@@ -1,0 +1,17 @@
+.logo {
+	font-size: 1.1rem;
+	font-weight: 700;
+
+	img {
+		margin-right: 0.8rem;
+		width: 40px;
+		height: 40px;
+		object-fit: contain;
+		filter: none;
+		box-sizing: border-box;
+		padding: 5px;
+		border-radius: 8px;
+		background: #052143;
+		box-shadow: 0 0.35rem 1rem rgba(5, 33, 67, 0.18);
+	}
+}

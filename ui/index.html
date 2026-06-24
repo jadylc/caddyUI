@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Caddy UI</title>
+		<meta name="description" content="Manage Nginx hosts with a simple, powerful interface" />
+		<link rel="preload" href="/images/caddy.svg?v=20260527" as="image" type="image/svg+xml" fetchPriority="high">
+		<link rel="apple-touch-icon" href="/images/caddy.svg?v=20260527" />
+		<link rel="icon" type="image/svg+xml" href="/images/caddy.svg?v=20260527" />
+		<link rel="manifest" href="/images/favicon/site.webmanifest" />
+		<link
+			rel="mask-icon"
+			href="/images/caddy.svg?v=20260527"
+			color="#5bbad5" />
+		<link rel="shortcut icon" type="image/svg+xml" href="/images/caddy.svg?v=20260527" />
+		<meta name="msapplication-TileColor" content="#4a4a4a" />
+		<meta
+			name="msapplication-config"
+			content="/images/favicon/browserconfig.xml" />
+		<meta name="theme-color" content="#ffffff" />
+	</head>
+	<body>
+		<noscript>You need to enable JavaScript to run this app.</noscript>
+		<div id="root"></div>
+		<script type="module" src="/src/main.tsx"></script>
+		<script>
+			if (global === undefined) {
+				var global = window;
+			}
+		</script>
+	</body>
+</html>

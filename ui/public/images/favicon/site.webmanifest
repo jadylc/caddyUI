@@ -1,0 +1,14 @@
+{
+    "name": "Caddy UI",
+    "short_name": "Caddy UI",
+    "icons": [
+        {
+            "src": "/images/caddy.svg?v=20260527",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        }
+    ],
+    "theme_color": "#ffffff",
+    "background_color": "#ffffff",
+    "display": "standalone"
+}

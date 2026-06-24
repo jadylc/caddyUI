@@ -1,0 +1,46 @@
+{
+    admin 0.0.0.0:2019 {
+        origins *
+    }
+    metrics
+    # 把 TLS 签发相关日志单独推一份到 caddy-api（127.0.0.1:9002）
+    # caddy-api 解析后写 last_error/last_error_at 到 site JSON，UI 直接展示
+    # soft_start 让 caddy 在 caddy-api 没起来时不 fail，断了会重连
+    log cert_events {
+        include tls.obtain http.acme_client
+        output net 127.0.0.1:9002 {
+            soft_start
+        }
+        format json
+        level INFO
+    }
+    # 把动态 DNS 相关日志推一份到 caddy-api（127.0.0.1:9003）
+    # caddy-api 解析后写 last_error/last_error_at 到 dynamic-dns JSON，UI 展示异常状态
+    log ddns_events {
+        include dynamic_dns
+        output net 127.0.0.1:9003 {
+            soft_start
+        }
+        format json
+        level DEBUG
+    }
+    import /etc/caddy/global.d/*.conf
+}
+
+# ========== 管理面板 ==========
+:8888 {
+    # 站点管理后端，strip /api 前缀
+    handle_path /api/* {
+        reverse_proxy 127.0.0.1:9001
+    }
+
+    # 静态文件 + SPA fallback
+    handle {
+        root * /srv/ui
+        file_server
+        try_files {path} /index.html
+    }
+}
+
+# ========== 业务路由（由面板写入 /config/sites/*.conf） ==========
+import /config/sites/*.conf

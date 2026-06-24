@@ -1,0 +1,163 @@
+.monitorTable {
+	width: 100%;
+	table-layout: fixed;
+}
+
+.primaryColumn {
+	width: 18%;
+}
+
+.statusColumn {
+	width: 10%;
+}
+
+.createdColumn {
+	width: 10%;
+}
+
+.createdCell {
+	display: block;
+	min-width: 0;
+	max-width: 100%;
+	overflow: hidden;
+	font-size: 0.8125rem;
+	line-height: 1.25;
+	text-overflow: ellipsis;
+}
+
+.registrarColumn {
+	width: 7%;
+}
+
+.dateColumn {
+	width: 10%;
+}
+
+.sslColumn {
+	width: 13%;
+}
+
+.dnsColumn {
+	width: 11%;
+}
+
+.checkColumn {
+	width: 11%;
+}
+
+.actionColumn {
+	width: 3rem;
+}
+
+.primaryCell {
+	min-width: 0;
+	width: 100%;
+	max-width: 100%;
+}
+
+.primaryDomain {
+	overflow: hidden;
+	font-size: 1rem;
+	font-weight: 700;
+	line-height: 1.25;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.mutedLine {
+	overflow: hidden;
+	margin-top: 0.25rem;
+	color: var(--tblr-secondary);
+	font-size: 0.75rem;
+	line-height: 1.25;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.targetSummary {
+	margin-top: 0.4rem;
+}
+
+.targetsCell {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem;
+	align-items: flex-start;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.targetBadge {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	font-family: monospace;
+	font-size: 0.75rem;
+	text-overflow: ellipsis;
+	vertical-align: top;
+	white-space: nowrap;
+}
+
+.metricCell {
+	min-width: 0;
+	max-width: 100%;
+	line-height: 1.25;
+}
+
+.metricMain {
+	overflow: hidden;
+	font-size: 0.8125rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.metricMeta {
+	overflow: hidden;
+	margin-top: 0.25rem;
+	color: var(--tblr-secondary);
+	font-size: 0.75rem;
+	line-height: 1.25;
+	max-width: 100%;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.dnsCell {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.ipBadge {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.registrarBadge {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.statusCell {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.statusCell :global(.status) {
+	max-width: 100%;
+}
+
+.statusCell :global(.text-danger) {
+	max-width: 100% !important;
+}
+
+.createdColumn :global(.text-nowrap) {
+	white-space: normal !important;
+}

@@ -1,0 +1,1082 @@
+{
+  "access-list": {
+    "defaultMessage": "通信规则"
+  },
+  "access-list.access-count": {
+    "defaultMessage": "{count} 条规则"
+  },
+  "access-list.auth-count": {
+    "defaultMessage": "{count} 个用户"
+  },
+  "access-list.help-rules-last": {
+    "defaultMessage": "当至少存在1条规则时，此拒绝所有规则将被添加到最后"
+  },
+  "access-list.help.rules-order": {
+    "defaultMessage": " 允许 (allow) 和禁止 (deny) 规则将按照它们定义的顺序执行。"
+  },
+  "access-list.pass-auth": {
+    "defaultMessage": "将认证传递给上游"
+  },
+  "access-list.public": {
+    "defaultMessage": "公开可访问"
+  },
+  "access-list.public.subtitle": {
+    "defaultMessage": "无需基本认证"
+  },
+  "wake-on-lan": {
+    "defaultMessage": "网络唤醒"
+  },
+  "wake-on-lan.device": {
+    "defaultMessage": "唤醒设备"
+  },
+  "wake-on-lan.devices": {
+    "defaultMessage": "唤醒设备"
+  },
+  "wake-on-lan.section.basic": {
+    "defaultMessage": "基础信息"
+  },
+  "wake-on-lan.section.packet": {
+    "defaultMessage": "发送参数"
+  },
+  "wake-on-lan.section.extra": {
+    "defaultMessage": "辅助信息"
+  },
+  "wake-on-lan.mac-address": {
+    "defaultMessage": "MAC 地址"
+  },
+  "wake-on-lan.host": {
+    "defaultMessage": "主机/IP"
+  },
+  "wake-on-lan.target": {
+    "defaultMessage": "发送目标"
+  },
+  "wake-on-lan.broadcast-address": {
+    "defaultMessage": "广播地址"
+  },
+  "wake-on-lan.broadcast-address.help": {
+    "defaultMessage": "留空时使用 255.255.255.255"
+  },
+  "wake-on-lan.port": {
+    "defaultMessage": "UDP 端口"
+  },
+  "wake-on-lan.secure-on": {
+    "defaultMessage": "SecureOn 密码"
+  },
+  "wake-on-lan.secure-on.help": {
+    "defaultMessage": "可选，仅设备启用 SecureOn 时填写 6 字节十六进制"
+  },
+  "wake-on-lan.error.mac": {
+    "defaultMessage": "请输入 6 字节 MAC 地址"
+  },
+  "wake-on-lan.error.broadcast": {
+    "defaultMessage": "请输入有效 IPv4 地址"
+  },
+  "wake-on-lan.error.port": {
+    "defaultMessage": "端口必须在 1 到 65535 之间"
+  },
+  "wake-on-lan.status-ready": {
+    "defaultMessage": "待唤醒"
+  },
+  "wake-on-lan.status-woken": {
+    "defaultMessage": "已唤醒"
+  },
+  "wake-on-lan.status-disabled": {
+    "defaultMessage": "已停用"
+  },
+  "wake-on-lan.status-error": {
+    "defaultMessage": "失败"
+  },
+  "wake-on-lan.action.wake": {
+    "defaultMessage": "唤醒"
+  },
+  "wake-on-lan.action.waking": {
+    "defaultMessage": "唤醒中"
+  },
+  "wake-on-lan.notification.woken": {
+    "defaultMessage": "唤醒包已发送"
+  },
+  "description": {
+    "defaultMessage": "备注"
+  },
+  "dynamic-dns": {
+    "defaultMessage": "动态域名"
+  },
+  "dynamic-dns.check-interval": {
+    "defaultMessage": "IP 检查频率"
+  },
+  "dynamic-dns.ip-versions": {
+    "defaultMessage": "IP 类型"
+  },
+  "dynamic-dns.ipv4": {
+    "defaultMessage": "IPv4"
+  },
+  "dynamic-dns.ipv6": {
+    "defaultMessage": "IPv6"
+  },
+  "dynamic-dns.resolvers": {
+    "defaultMessage": "DNS 服务器"
+  },
+  "domain-monitor": {
+    "defaultMessage": "域名监控"
+  },
+  "domain-monitor.action.check": {
+    "defaultMessage": "立即检查"
+  },
+  "domain-monitor.check-interval": {
+    "defaultMessage": "检查频率"
+  },
+  "domain-monitor.check-interval.help": {
+    "defaultMessage": "支持 24h、12h、7d 这类时间格式"
+  },
+  "domain-monitor.check": {
+    "defaultMessage": "检查"
+  },
+  "domain-monitor.check-every": {
+    "defaultMessage": "每 {interval}"
+  },
+  "domain-monitor.checkDns": {
+    "defaultMessage": "检查 DNS 解析"
+  },
+  "domain-monitor.checkDomain": {
+    "defaultMessage": "检查域名到期"
+  },
+  "domain-monitor.checkSsl": {
+    "defaultMessage": "检查 SSL 证书"
+  },
+  "domain-monitor.check-type.warning": {
+    "defaultMessage": "至少需要启用一种检查类型"
+  },
+  "domain-monitor.days-left": {
+    "defaultMessage": "剩余 {days} 天"
+  },
+  "domain-monitor.domains": {
+    "defaultMessage": "域名"
+  },
+  "domain-monitor.domains.help": {
+    "defaultMessage": "每行一个域名，也可以用逗号分隔；SSL 检查要求 HTTPS 端口可连接，非 443 端口可写成 example.com:8443"
+  },
+  "domain-monitor.domain-expires": {
+    "defaultMessage": "域名到期"
+  },
+  "domain-monitor.last-checked": {
+    "defaultMessage": "上次检查"
+  },
+  "domain-monitor.notification.checked": {
+    "defaultMessage": "域名检查完成"
+  },
+  "domain-monitor.primary-domain": {
+    "defaultMessage": "主域名"
+  },
+  "domain-monitor.resolved-ips": {
+    "defaultMessage": "解析 IP"
+  },
+  "domain-monitor.resolvers": {
+    "defaultMessage": "DNS 服务器"
+  },
+  "domain-monitor.resolvers.help": {
+    "defaultMessage": "可选，每行一个 DNS 服务器，例如 1.1.1.1 或 8.8.8.8:53"
+  },
+  "domain-monitor.ssl-expires": {
+    "defaultMessage": "证书到期"
+  },
+  "domain-monitor.ssl-issuer": {
+    "defaultMessage": "签发：{issuer}"
+  },
+  "domain-monitor.ssl-source.caddy": {
+    "defaultMessage": "Caddy 本地证书"
+  },
+  "domain-monitor.status-error": {
+    "defaultMessage": "异常"
+  },
+  "domain-monitor.status-offline": {
+    "defaultMessage": "已停用"
+  },
+  "domain-monitor.status-ok": {
+    "defaultMessage": "正常"
+  },
+  "domain-monitor.status-unknown": {
+    "defaultMessage": "未检查"
+  },
+  "domain-monitor.status-warning": {
+    "defaultMessage": "即将到期"
+  },
+  "domain-monitor.threshold-days": {
+    "defaultMessage": "到期告警阈值"
+  },
+  "domain-monitor.threshold-days.help": {
+    "defaultMessage": "证书剩余天数小于等于该值时标记为即将到期"
+  },
+  "domain-monitor.targets": {
+    "defaultMessage": "监控目标"
+  },
+  "name": {
+    "defaultMessage": "名称"
+  },
+  "access-list.satisfy-any": {
+    "defaultMessage": "满足任意条件"
+  },
+  "access-list.subtitle": {
+    "defaultMessage": "{users} 个用户, {rules} 条规则 - 创建时间: {date}"
+  },
+  "access-lists": {
+    "defaultMessage": "通信规则"
+  },
+  "action.add": {
+    "defaultMessage": "添加"
+  },
+  "action.add-location": {
+    "defaultMessage": "添加路径规则"
+  },
+  "action.close": {
+    "defaultMessage": "关闭"
+  },
+  "action.copy": {
+    "defaultMessage": "复制"
+  },
+  "action.delete": {
+    "defaultMessage": "删除"
+  },
+  "action.disable": {
+    "defaultMessage": "禁用"
+  },
+  "action.download": {
+    "defaultMessage": "下载"
+  },
+  "action.edit": {
+    "defaultMessage": "编辑"
+  },
+  "action.enable": {
+    "defaultMessage": "启用"
+  },
+  "action.permissions": {
+    "defaultMessage": "权限"
+  },
+  "action.renew": {
+    "defaultMessage": "续期"
+  },
+  "action.retry": {
+    "defaultMessage": "重试"
+  },
+  "action.view-details": {
+    "defaultMessage": "查看详情"
+  },
+  "auditlogs": {
+    "defaultMessage": "审计日志"
+  },
+  "cancel": {
+    "defaultMessage": "取消"
+  },
+  "certificate": {
+    "defaultMessage": "证书"
+  },
+  "certificate.custom-certificate": {
+    "defaultMessage": "证书"
+  },
+  "certificate.custom-certificate-key": {
+    "defaultMessage": "证书密钥"
+  },
+  "certificate.custom-intermediate": {
+    "defaultMessage": "中间证书"
+  },
+  "certificate.in-use": {
+    "defaultMessage": "使用中"
+  },
+  "certificate.none.subtitle": {
+    "defaultMessage": "未分配证书"
+  },
+  "certificate.none.subtitle.for-http": {
+    "defaultMessage": "此主机将不使用 HTTPS"
+  },
+  "certificate.none.title": {
+    "defaultMessage": "无"
+  },
+  "certificate.not-in-use": {
+    "defaultMessage": "未使用"
+  },
+  "certificate.renew": {
+    "defaultMessage": "续期证书"
+  },
+  "certificate.status.expired": {
+    "defaultMessage": "已过期"
+  },
+  "certificate.status.expiring": {
+    "defaultMessage": "即将过期"
+  },
+  "certificate.status.failed": {
+    "defaultMessage": "失败"
+  },
+  "certificate.status.issued": {
+    "defaultMessage": "已签发"
+  },
+  "certificate.status.pending": {
+    "defaultMessage": "待签发"
+  },
+  "certificates": {
+    "defaultMessage": "证书列表"
+  },
+  "certificates.custom": {
+    "defaultMessage": "自定义证书"
+  },
+  "certificates.custom.warning": {
+    "defaultMessage": "不支持受密码保护的密钥文件。"
+  },
+  "certificates.dns.credentials": {
+    "defaultMessage": "ACME DNS 凭据"
+  },
+  "certificates.dns.credentials-note": {
+    "defaultMessage": "这里会转换为 Caddy ACME DNS-01 所需的 DNS 提供商凭据。"
+  },
+  "certificates.dns.credentials-warning": {
+    "defaultMessage": "此数据将以明文形式存储在数据库和文件中！"
+  },
+  "certificates.dns.propagation-seconds": {
+    "defaultMessage": "传播时间 (秒)"
+  },
+  "certificates.dns.propagation-seconds-note": {
+    "defaultMessage": "留空以使用插件默认值。等待DNS传播的秒数。"
+  },
+  "certificates.dns.provider": {
+    "defaultMessage": "DNS 提供商"
+  },
+  "certificates.dns.warning": {
+    "defaultMessage": "Caddy 将通过 ACME DNS-01 验证签发证书，请填写对应 DNS 提供商的 API 凭据。"
+  },
+  "certificates.http.reachability-404": {
+    "defaultMessage": "在此域名下找到了一个服务器，但它似乎不是当前 Caddy UI 管理的 Caddy 服务。请确保域名指向本实例所在服务器。"
+  },
+  "certificates.http.reachability-failed-to-check": {
+    "defaultMessage": "由于与site24x7.com通信错误，无法检查可达性。"
+  },
+  "certificates.http.reachability-not-resolved": {
+    "defaultMessage": "此域名下没有可用的服务器。请确保域名存在并指向 Caddy UI 实例运行的 IP 地址，如有必要，请转发 80 端口。"
+  },
+  "certificates.http.reachability-ok": {
+    "defaultMessage": "您的服务器可以访问，应该可以创建证书。"
+  },
+  "certificates.http.reachability-other": {
+    "defaultMessage": "在此域名下找到了一个服务器，但它返回了意外的状态码 {code}。请确保域名指向 Caddy UI 实例运行的 IP 地址。"
+  },
+  "certificates.http.reachability-wrong-data": {
+    "defaultMessage": "在此域名下找到了一个服务器，但它返回了意外的数据。请确保域名指向 Caddy UI 实例运行的 IP 地址。"
+  },
+  "certificates.http.test-results": {
+    "defaultMessage": "测试结果"
+  },
+  "certificates.http.warning": {
+    "defaultMessage": "这些域名必须配置为指向本设备。"
+  },
+  "authelia-settings": {
+    "defaultMessage": "Authelia 设置"
+  },
+  "authentik-settings": {
+    "defaultMessage": "authentik 设置"
+  },
+  "notifications-settings": {
+    "defaultMessage": "推送通知"
+  },
+  "credentials-settings": {
+    "defaultMessage": "凭据管理"
+  },
+  "authelia": {
+    "defaultMessage": "Authelia"
+  },
+  "authentik": {
+    "defaultMessage": "authentik"
+  },
+  "authelia.description": {
+    "defaultMessage": "Authelia 是一个开源的身份认证和访问控制门户，支持双因素认证 (2FA)、单点登录 (SSO) 和细粒度的访问控制策略。它可以与 Caddy 的 forward_auth 集成，为后端服务提供统一的认证保护。"
+  },
+  "authelia.enabled": {
+    "defaultMessage": "启用 Authelia 集成"
+  },
+  "authelia.fail-open": {
+    "defaultMessage": "Authelia 不可用时保持服务可访问"
+  },
+  "authelia.fail-open.help": {
+    "defaultMessage": "当 Caddy 无法连接 Authelia 时，将临时绕过认证并继续转发流量。"
+  },
+  "authelia.fail-open.warning": {
+    "defaultMessage": "故障放行可以避免服务中断，但 Authelia 离线期间认证会被临时绕过。"
+  },
+  "authelia.settings": {
+    "defaultMessage": "Authelia 设置"
+  },
+  "authelia.summary.disabled": {
+    "defaultMessage": "全局 Authelia 尚未启用。请先在设置中启用后再保护此站点。"
+  },
+  "authelia.summary.enabled": {
+    "defaultMessage": "此站点将使用全局 Authelia：{endpoint}。"
+  },
+  "authentik.description": {
+    "defaultMessage": "authentik 可以通过 Proxy Outpost 保护后端应用。配置 Caddy 可访问的 outpost 地址后，即可在任意代理主机上选择该 forward_auth 提供方。"
+  },
+  "authentik.enabled": {
+    "defaultMessage": "启用 authentik 集成"
+  },
+  "authentik.settings": {
+    "defaultMessage": "authentik 设置"
+  },
+  "authentik.summary.disabled": {
+    "defaultMessage": "全局 authentik 尚未启用。请先在设置中启用后再保护此站点。"
+  },
+  "authentik.summary.enabled": {
+    "defaultMessage": "此站点将使用全局 authentik：{endpoint}。"
+  },
+  "certificates.key-type": {
+    "defaultMessage": "密钥类型"
+  },
+  "certificates.key-type-description": {
+    "defaultMessage": "RSA 兼容性更好，ECDSA 更快更安全但旧系统可能不支持"
+  },
+  "certificates.key-type-ecdsa": {
+    "defaultMessage": "ECDSA 256"
+  },
+  "certificates.key-type-rsa": {
+    "defaultMessage": "RSA 2048"
+  },
+  "certificates.request.subtitle": {
+    "defaultMessage": "可选择签发机构"
+  },
+  "certificates.request.title": {
+    "defaultMessage": "申请新证书"
+  },
+  "certificates.request.submitted": {
+    "defaultMessage": "证书申请已提交。签发结果请查看右上角日志。"
+  },
+  "column.access": {
+    "defaultMessage": "访问"
+  },
+  "column.auth": {
+    "defaultMessage": "认证"
+  },
+  "column.authorization": {
+    "defaultMessage": "授权"
+  },
+  "column.authorizations": {
+    "defaultMessage": "授权列表"
+  },
+  "column.custom-locations": {
+    "defaultMessage": "自定义路径规则"
+  },
+  "column.destination": {
+    "defaultMessage": "目标"
+  },
+  "column.details": {
+    "defaultMessage": "详情"
+  },
+  "column.email": {
+    "defaultMessage": "邮箱"
+  },
+  "column.event": {
+    "defaultMessage": "事件"
+  },
+  "column.expires": {
+    "defaultMessage": "过期时间"
+  },
+  "column.http-code": {
+    "defaultMessage": "访问"
+  },
+  "column.incoming-port": {
+    "defaultMessage": "入站端口"
+  },
+  "column.listen-ports": {
+    "defaultMessage": "监听端口"
+  },
+  "column.name": {
+    "defaultMessage": "名称"
+  },
+  "column.protocol": {
+    "defaultMessage": "协议"
+  },
+  "column.provider": {
+    "defaultMessage": "提供商"
+  },
+  "column.roles": {
+    "defaultMessage": "角色"
+  },
+  "column.rules": {
+    "defaultMessage": "规则"
+  },
+  "column.satisfy": {
+    "defaultMessage": "满足"
+  },
+  "column.satisfy-all": {
+    "defaultMessage": "全部"
+  },
+  "column.satisfy-any": {
+    "defaultMessage": "任意"
+  },
+  "column.scheme": {
+    "defaultMessage": "协议"
+  },
+  "column.source": {
+    "defaultMessage": "来源"
+  },
+  "column.ssl": {
+    "defaultMessage": "SSL"
+  },
+  "column.status": {
+    "defaultMessage": "状态"
+  },
+  "column.used-by": {
+    "defaultMessage": "使用方"
+  },
+  "created-on": {
+    "defaultMessage": "创建时间: {date}"
+  },
+  "dashboard": {
+    "defaultMessage": "仪表板"
+  },
+  "dead-host": {
+    "defaultMessage": "错误页面"
+  },
+  "dead-hosts": {
+    "defaultMessage": "错误页面列表"
+  },
+  "dead-hosts.count": {
+    "defaultMessage": "{count} 个错误页面列表"
+  },
+  "disabled": {
+    "defaultMessage": "已禁用"
+  },
+  "domain-names": {
+    "defaultMessage": "域名"
+  },
+  "domain-names.max": {
+    "defaultMessage": "{count} 个最多域名数量"
+  },
+  "domain-names.placeholder": {
+    "defaultMessage": "开始输入以添加域名..."
+  },
+  "domain-names.wildcards-not-permitted": {
+    "defaultMessage": "此类型不允许使用通配符"
+  },
+  "domain-names.wildcards-not-supported": {
+    "defaultMessage": "此 CA 不支持通配符"
+  },
+  "domains.advanced": {
+    "defaultMessage": "高级选项"
+  },
+  "domains.force-ssl": {
+    "defaultMessage": "强制 SSL"
+  },
+  "domains.hsts-enabled": {
+    "defaultMessage": "HSTS 已启用"
+  },
+  "domains.hsts-subdomains": {
+    "defaultMessage": "HSTS 子域名"
+  },
+  "domains.http2-support": {
+    "defaultMessage": "HTTP/2 由 Caddy 自动协商"
+  },
+  "domains.trust-forwarded-proto": {
+    "defaultMessage": "信任上游代理传递的协议类型头"
+  },
+  "domains.use-dns": {
+    "defaultMessage": "使用DNS验证"
+  },
+  "email-address": {
+    "defaultMessage": "邮箱地址"
+  },
+  "empty-search": {
+    "defaultMessage": "未找到结果"
+  },
+  "empty-subtitle": {
+    "defaultMessage": "可使用右上角的新增按钮创建第一条记录。"
+  },
+  "enabled": {
+    "defaultMessage": "已启用"
+  },
+  "error.access.at-least-one": {
+    "defaultMessage": "需要至少一个授权或访问规则"
+  },
+  "error.access.duplicate-usernames": {
+    "defaultMessage": "授权用户名必须唯一"
+  },
+  "error.invalid-auth": {
+    "defaultMessage": "无效的邮箱或密码"
+  },
+  "error.invalid-domain": {
+    "defaultMessage": "无效的域名: {domain}"
+  },
+  "error.invalid-email": {
+    "defaultMessage": "无效的邮箱地址"
+  },
+  "error.max-character-length": {
+    "defaultMessage": "最大长度为 {max} 个字符"
+  },
+  "error.max-domains": {
+    "defaultMessage": "域名过多，最多为 {max} 个"
+  },
+  "error.maximum": {
+    "defaultMessage": "最大值为 {max}"
+  },
+  "error.min-character-length": {
+    "defaultMessage": "最小长度为 {min} 个字符"
+  },
+  "error.minimum": {
+    "defaultMessage": "最小值为 {min}"
+  },
+  "error.passwords-must-match": {
+    "defaultMessage": "密码必须匹配"
+  },
+  "error.required": {
+    "defaultMessage": "此项为必填项"
+  },
+  "expires.on": {
+    "defaultMessage": "过期时间: {date}"
+  },
+  "footer.github-fork": {
+    "defaultMessage": "在 Github 上复刻 (Fork) 本项目"
+  },
+  "host.flags.block-exploits": {
+    "defaultMessage": "阻止常见攻击"
+  },
+  "host.flags.cache-assets": {
+    "defaultMessage": "缓存资源"
+  },
+  "host.flags.preserve-path": {
+    "defaultMessage": "保留路径"
+  },
+  "host.flags.protocols": {
+    "defaultMessage": "协议"
+  },
+  "host.flags.websockets-upgrade": {
+    "defaultMessage": "WebSocket 透传"
+  },
+  "host.flags.upstream-insecure-skip-verify": {
+    "defaultMessage": "跳过上游 HTTPS 证书校验"
+  },
+  "host.flags.upstream-insecure-skip-verify.help": {
+    "defaultMessage": "仅在转发协议为 https 时生效，用于自签名或内网证书。"
+  },
+  "host.forward-port": {
+    "defaultMessage": "转发端口"
+  },
+  "host.forward-scheme": {
+    "defaultMessage": "协议"
+  },
+  "host.listen-port": {
+    "defaultMessage": "监听端口"
+  },
+  "host.listen-port.help": {
+    "defaultMessage": "留空表示使用 Caddy 默认的 80/443；多个端口用逗号分隔，例如 443,11111。"
+  },
+  "hosts": {
+    "defaultMessage": "主机列表"
+  },
+  "http-only": {
+    "defaultMessage": "仅 HTTP"
+  },
+  "lets-encrypt": {
+    "defaultMessage": "Let's Encrypt"
+  },
+  "lets-encrypt-via-dns": {
+    "defaultMessage": "申请证书（DNS 验证）"
+  },
+  "lets-encrypt-via-http": {
+    "defaultMessage": "申请证书（HTTP 验证）"
+  },
+  "forward-auth": {
+    "defaultMessage": "Forward Auth"
+  },
+  "forward-auth.toggle": {
+    "defaultMessage": "使用 Forward Auth 保护"
+  },
+  "forward-auth.authelia": {
+    "defaultMessage": "使用 Authelia 保护"
+  },
+  "forward-auth.help": {
+    "defaultMessage": "使用全局 Authelia 设置保护此反代站点。"
+  },
+  "forward-auth.provider": {
+    "defaultMessage": "提供方"
+  },
+  "forward-auth.upstream": {
+    "defaultMessage": "Authelia URL"
+  },
+  "forward-auth.upstream.help": {
+    "defaultMessage": "填写 Caddy 能访问到的 Authelia 地址，例如 http://authelia:9091。"
+  },
+  "forward-auth.upstream.help.authelia": {
+    "defaultMessage": "填写 Caddy 能访问到的 Authelia 地址，例如 http://authelia:9091。"
+  },
+  "forward-auth.upstream.help.authentik": {
+    "defaultMessage": "填写 Caddy 能访问到的 authentik Server 或 Outpost 地址，例如 Docker 中的 http://authentik-server:9000。"
+  },
+  "forward-auth.summary": {
+    "defaultMessage": "Caddy 将在转发前检查 {endpoint}。"
+  },
+  "forward-auth.advanced": {
+    "defaultMessage": "高级 Authelia 设置"
+  },
+  "forward-auth.uri": {
+    "defaultMessage": "认证 URI"
+  },
+  "forward-auth.copy-headers": {
+    "defaultMessage": "复制的响应头"
+  },
+  "loading": {
+    "defaultMessage": "加载中···"
+  },
+  "logs": {
+    "defaultMessage": "日志"
+  },
+  "logs.auto-scroll": {
+    "defaultMessage": "自动滚动"
+  },
+  "logs.empty": {
+    "defaultMessage": "暂无日志"
+  },
+  "login.title": {
+    "defaultMessage": "登录您的账户"
+  },
+  "nginx-config.label": {
+    "defaultMessage": "自定义 Caddyfile 片段"
+  },
+  "nginx-config.placeholder": {
+    "defaultMessage": "# 在此输入 Caddyfile 指令片段，保存后会合并到对应站点配置中。"
+  },
+  "caddy-config.label": {
+    "defaultMessage": "自定义 Caddyfile 片段"
+  },
+  "caddy-config.placeholder": {
+    "defaultMessage": "# 例如：\n# header Strict-Transport-Security \"max-age=31536000; includeSubDomains\"\n# request_body {\n#   max_size 50MB\n# }"
+  },
+  "no-permission-error": {
+    "defaultMessage": "您无权查看此内容。"
+  },
+  "notfound.action": {
+    "defaultMessage": "返回首页"
+  },
+  "notfound.content": {
+    "defaultMessage": "很抱歉，您要查找的页面未找到"
+  },
+  "notfound.title": {
+    "defaultMessage": "糟糕...您刚刚找到了一个错误页面"
+  },
+  "notification.error": {
+    "defaultMessage": "错误"
+  },
+  "notification.object-deleted": {
+    "defaultMessage": "{object} 已被删除"
+  },
+  "notification.object-disabled": {
+    "defaultMessage": "{object} 已被禁用"
+  },
+  "notification.object-enabled": {
+    "defaultMessage": "{object} 已被启用"
+  },
+  "notification.object-renewed": {
+    "defaultMessage": "{object} 已续期"
+  },
+  "notification.object-saved": {
+    "defaultMessage": "{object} 已保存"
+  },
+  "notification.success": {
+    "defaultMessage": "成功"
+  },
+  "object.actions-title": {
+    "defaultMessage": "{object} #{id}"
+  },
+  "object.add": {
+    "defaultMessage": "添加 {object}"
+  },
+  "object.delete": {
+    "defaultMessage": "删除 {object}"
+  },
+  "object.delete.content": {
+    "defaultMessage": "您确定要删除 {object} 吗？"
+  },
+  "object.edit": {
+    "defaultMessage": "编辑 {object}"
+  },
+  "object.empty": {
+    "defaultMessage": "没有 {objects}"
+  },
+  "object.event.created": {
+    "defaultMessage": "已创建 {object}"
+  },
+  "object.event.deleted": {
+    "defaultMessage": "已删除 {object}"
+  },
+  "object.event.disabled": {
+    "defaultMessage": "已禁用 {object}"
+  },
+  "object.event.enabled": {
+    "defaultMessage": "已启用 {object}"
+  },
+  "object.event.renewed": {
+    "defaultMessage": "已续期 {object}"
+  },
+  "object.event.updated": {
+    "defaultMessage": "已更新 {object}"
+  },
+  "offline": {
+    "defaultMessage": "离线"
+  },
+  "online": {
+    "defaultMessage": "在线"
+  },
+  "options": {
+    "defaultMessage": "选项"
+  },
+  "password": {
+    "defaultMessage": "密码"
+  },
+  "password.generate": {
+    "defaultMessage": "生成随机密码"
+  },
+  "password.hide": {
+    "defaultMessage": "隐藏密码"
+  },
+  "password.show": {
+    "defaultMessage": "显示密码"
+  },
+  "permissions.hidden": {
+    "defaultMessage": "隐藏"
+  },
+  "permissions.manage": {
+    "defaultMessage": "管理"
+  },
+  "permissions.view": {
+    "defaultMessage": "仅查看"
+  },
+  "permissions.visibility.all": {
+    "defaultMessage": "所有项目"
+  },
+  "permissions.visibility.title": {
+    "defaultMessage": "项目可见性"
+  },
+  "permissions.visibility.user": {
+    "defaultMessage": "仅创建的项目"
+  },
+  "proxy-host": {
+    "defaultMessage": "代理服务"
+  },
+  "proxy-host.forward-host": {
+    "defaultMessage": "转发主机名 / IP"
+  },
+  "proxy-hosts": {
+    "defaultMessage": "代理服务列表"
+  },
+  "proxy-hosts.count": {
+    "defaultMessage": "{count} 个代理服务"
+  },
+  "public": {
+    "defaultMessage": "公开"
+  },
+  "redirection-host": {
+    "defaultMessage": "重定向主机"
+  },
+  "redirection-host.forward-domain": {
+    "defaultMessage": "转发域名"
+  },
+  "redirection-host.forward-http-code": {
+    "defaultMessage": "HTTP 状态码"
+  },
+  "redirection-hosts": {
+    "defaultMessage": "重定向主机列表"
+  },
+  "redirection-hosts.count": {
+    "defaultMessage": "{count} 个重定向主机"
+  },
+  "role.admin": {
+    "defaultMessage": "管理员"
+  },
+  "role.standard-user": {
+    "defaultMessage": "标准用户"
+  },
+  "save": {
+    "defaultMessage": "保存"
+  },
+  "setting": {
+    "defaultMessage": "设置"
+  },
+  "settings": {
+    "defaultMessage": "设置"
+  },
+  "site-management": {
+    "defaultMessage": "站点管理"
+  },
+  "domain-certificates": {
+    "defaultMessage": "域名与证书"
+  },
+  "access-control": {
+    "defaultMessage": "访问控制"
+  },
+  "system-management": {
+    "defaultMessage": "系统管理"
+  },
+  "settings.default-site": {
+    "defaultMessage": "默认站点"
+  },
+  "settings.default-site.404": {
+    "defaultMessage": "错误页面"
+  },
+  "settings.default-site.444": {
+    "defaultMessage": "无响应 (444)"
+  },
+  "settings.default-site.congratulations": {
+    "defaultMessage": "欢迎页面"
+  },
+  "settings.default-site.description": {
+    "defaultMessage": "当 Caddy 遇到未知主机时显示什么"
+  },
+  "settings.default-site.html": {
+    "defaultMessage": "自定义 HTML"
+  },
+  "settings.default-site.html.placeholder": {
+    "defaultMessage": "<!-- 在此输入您的自定义 HTML 内容 -->"
+  },
+  "settings.default-site.redirect": {
+    "defaultMessage": "重定向"
+  },
+  "setup.preamble": {
+    "defaultMessage": "通过创建您的管理员账户开始使用。"
+  },
+  "setup.title": {
+    "defaultMessage": "欢迎！"
+  },
+  "sign-in": {
+    "defaultMessage": "登录"
+  },
+  "ssl-certificate": {
+    "defaultMessage": "SSL 证书"
+  },
+  "stream": {
+    "defaultMessage": "端口转发"
+  },
+  "stream.forward-host": {
+    "defaultMessage": "转发主机"
+  },
+  "stream.incoming-port": {
+    "defaultMessage": "入站端口"
+  },
+  "streams": {
+    "defaultMessage": "端口转发列表"
+  },
+  "streams.count": {
+    "defaultMessage": "{count} 个端口转发"
+  },
+  "streams.tcp": {
+    "defaultMessage": "TCP"
+  },
+  "streams.udp": {
+    "defaultMessage": "UDP"
+  },
+  "test": {
+    "defaultMessage": "测试"
+  },
+  "user": {
+    "defaultMessage": "用户"
+  },
+  "user.change-password": {
+    "defaultMessage": "修改密码"
+  },
+  "user.confirm-password": {
+    "defaultMessage": "确认密码"
+  },
+  "user.current-password": {
+    "defaultMessage": "当前密码"
+  },
+  "user.edit-profile": {
+    "defaultMessage": "编辑资料"
+  },
+  "user.full-name": {
+    "defaultMessage": "全名"
+  },
+  "user.login-as": {
+    "defaultMessage": "登录用户 {name}"
+  },
+  "user.logout": {
+    "defaultMessage": "退出登录"
+  },
+  "user.new-password": {
+    "defaultMessage": "新密码"
+  },
+  "user.nickname": {
+    "defaultMessage": "昵称"
+  },
+  "user.set-password": {
+    "defaultMessage": "设置密码"
+  },
+  "user.set-permissions": {
+    "defaultMessage": "为用户 {name} 设置权限"
+  },
+  "user.switch-dark": {
+    "defaultMessage": "切换到深色模式"
+  },
+  "user.switch-light": {
+    "defaultMessage": "切换到浅色模式"
+  },
+  "username": {
+    "defaultMessage": "用户名"
+  },
+  "users": {
+    "defaultMessage": "用户列表"
+  },
+  "dynamic-dns.check-interval.help": {
+    "defaultMessage": "如 5m（5分钟）、1h（1小时）"
+  },
+  "dynamic-dns.domains": {
+    "defaultMessage": "域名"
+  },
+  "dynamic-dns.domains.help": {
+    "defaultMessage": "每行一个，格式：DNS 区域 记录名；根记录用 @。例如：example.com a 表示 a.example.com，example.com @ 表示 example.com。A/AAAA 由 IPv4/IPv6 开关控制"
+  },
+  "dynamic-dns.credential-add": {
+    "defaultMessage": "管理 DNS 凭据"
+  },
+  "dynamic-dns.resolvers.help": {
+    "defaultMessage": "用于查询本机当前 IP 地址的 DNS 服务器，每行一个，如 8.8.8.8。留空则使用系统默认"
+  },
+  "dynamic-dns.ip-service-url": {
+    "defaultMessage": "IP 检测接口"
+  },
+  "dynamic-dns.ip-service-url.hint": {
+    "defaultMessage": "自定义获取公网 IP 的 URL，接口需直接返回纯 IP。默认: api.ipify.org。如被拦截，可使用 https://ifconfig.me/ip 或 https://ipinfo.io/ip"
+  },
+  "dynamic-dns.ttl": {
+    "defaultMessage": "缓存时间"
+  },
+  "dynamic-dns.ttl.help": {
+    "defaultMessage": "如 1h（1小时）、300（300秒），留空使用默认值"
+  },
+  "dynamic-dns.credential-reusing": {
+    "defaultMessage": "复用已保存的凭据"
+  },
+  "dynamic-dns.alidns.access-key-id": {
+    "defaultMessage": "AccessKey ID"
+  },
+  "dynamic-dns.alidns.access-key-secret": {
+    "defaultMessage": "AccessKey Secret"
+  },
+  "dynamic-dns.cloudflare.api-token": {
+    "defaultMessage": "API Token"
+  },
+  "dynamic-dns.dnspod.token": {
+    "defaultMessage": "DNSPod Token"
+  },
+  "dynamic-dns.dnspod.token.help": {
+    "defaultMessage": "格式：APP_ID,APP_TOKEN（在 DNSPod 控制台获取）"
+  },
+  "dynamic-dns.status-error": {
+    "defaultMessage": "异常"
+  },
+  "dynamic-dns.status-online": {
+    "defaultMessage": "正常"
+  },
+  "dynamic-dns.status-offline": {
+    "defaultMessage": "已禁用"
+  },
+  "system-settings": {
+    "defaultMessage": "系统设置"
+  },
+  "settings.acme-email": {
+    "defaultMessage": "ACME 联系邮箱"
+  },
+  "settings.acme-email.help": {
+    "defaultMessage": "用于 ACME 证书申请时的联系邮箱，可接收来自证书颁发机构的过期提醒等通知。留空将自动生成随机邮箱。"
+  }
+}
