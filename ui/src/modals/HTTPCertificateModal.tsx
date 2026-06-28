@@ -7,8 +7,10 @@ import { Alert } from "react-bootstrap";
 import Modal from "react-bootstrap/Modal";
 import { createCertificate, testHttpCertificate, type Certificate } from "src/api/backend";
 import { Button, CertificateAuthorityFields, DomainNamesField } from "src/components";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { T } from "src/locale";
 import { showSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 type HTTPCertificateModalProps = InnerModalProps & {
 	initialData?: any;
@@ -21,6 +23,7 @@ const showHTTPCertificateModal = (initialData?: any, onCreated?: (certificate: C
 
 const HTTPCertificateModal = EasyModal.create(
 	({ visible, remove, initialData, onCreated }: HTTPCertificateModalProps) => {
+		const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 		const queryClient = useQueryClient();
 		const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
 		const [isSubmitting, setIsSubmitting] = useState(false);
@@ -125,7 +128,7 @@ const HTTPCertificateModal = EasyModal.create(
 		};
 
 		return (
-			<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+			<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 				<Formik
 					initialValues={
 						{
@@ -144,6 +147,7 @@ const HTTPCertificateModal = EasyModal.create(
 				>
 					{() => (
 						<Form>
+							<DirtySync dirtyRef={dirtyRef} />
 							<Modal.Header closeButton>
 								<Modal.Title>
 									{isEdit ? (
@@ -202,7 +206,7 @@ const HTTPCertificateModal = EasyModal.create(
 								</div>
 							</Modal.Body>
 							<Modal.Footer>
-								<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting || isTesting}>
+								<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting || isTesting}>
 									<T id="cancel" />
 								</Button>
 								<div className="ms-auto">
@@ -232,7 +236,8 @@ const HTTPCertificateModal = EasyModal.create(
 					)}
 				</Formik>
 			</Modal>
-		);
+			<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+		</>);
 	},
 );
 

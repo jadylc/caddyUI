@@ -17,7 +17,7 @@ const EventDetailsModal = EasyModal.create(({ id, visible, remove }: Props) => {
 	const { data, isLoading, error } = useAuditLog(id);
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false}>
+		<Modal show={visible} onHide={remove} backdrop="static" keyboard>
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}

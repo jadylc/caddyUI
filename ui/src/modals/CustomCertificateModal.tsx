@@ -7,15 +7,18 @@ import { Alert } from "react-bootstrap";
 import Modal from "react-bootstrap/Modal";
 import { type Certificate, createCertificate, uploadCertificate, validateCertificate } from "src/api/backend";
 import { Button } from "src/components";
-import { T } from "src/locale";
+import { intl, T } from "src/locale";
 import { validateString } from "src/modules/Validations";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const showCustomCertificateModal = () => {
 	EasyModal.show(CustomCertificateModal);
 };
 
 const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModalProps) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const queryClient = useQueryClient();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
@@ -57,7 +60,7 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 	};
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			<Formik
 				initialValues={
 					{
@@ -72,6 +75,7 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 			>
 				{() => (
 					<Form>
+						<DirtySync dirtyRef={dirtyRef} />
 						<Modal.Header closeButton>
 							<Modal.Title>
 								<T id="object.add" tData={{ object: "certificates.custom" }} />
@@ -98,20 +102,18 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 													type="text"
 													required
 													autoComplete="off"
-													className="form-control"
+													className={`form-control ${form.errors.niceName && form.touched.niceName ? "is-invalid" : ""}`}
 													{...field}
 												/>
-												{form.errors.niceName ? (
+												{form.errors.niceName && form.touched.niceName && (
 													<div className="invalid-feedback">
-														{form.errors.niceName && form.touched.niceName
-															? form.errors.niceName
-															: null}
+														{form.errors.niceName}
 													</div>
-												) : null}
+												)}
 											</div>
 										)}
 									</Field>
-									<Field name="certificateKey">
+									<Field name="certificateKey" validate={(v: any) => !v ? intl.formatMessage({ id: "error.required" }) : undefined}>
 										{({ field, form }: any) => (
 											<div className="mb-3">
 												<label htmlFor="certificateKey" className="form-label">
@@ -122,7 +124,7 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 													type="file"
 													required
 													autoComplete="off"
-													className="form-control"
+													className={`form-control ${form.errors.certificateKey && form.touched.certificateKey ? "is-invalid" : ""}`}
 													onChange={(event) => {
 														form.setFieldValue(
 															field.name,
@@ -132,17 +134,15 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 														);
 													}}
 												/>
-												{form.errors.certificateKey ? (
+												{form.errors.certificateKey && form.touched.certificateKey && (
 													<div className="invalid-feedback">
-														{form.errors.certificateKey && form.touched.certificateKey
-															? form.errors.certificateKey
-															: null}
+														{form.errors.certificateKey}
 													</div>
-												) : null}
+												)}
 											</div>
 										)}
 									</Field>
-									<Field name="certificate">
+									<Field name="certificate" validate={(v: any) => !v ? intl.formatMessage({ id: "error.required" }) : undefined}>
 										{({ field, form }: any) => (
 											<div className="mb-3">
 												<label htmlFor="certificate" className="form-label">
@@ -153,7 +153,7 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 													type="file"
 													required
 													autoComplete="off"
-													className="form-control"
+													className={`form-control ${form.errors.certificate && form.touched.certificate ? "is-invalid" : ""}`}
 													onChange={(event) => {
 														form.setFieldValue(
 															field.name,
@@ -163,13 +163,11 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 														);
 													}}
 												/>
-												{form.errors.certificate ? (
+												{form.errors.certificate && form.touched.certificate && (
 													<div className="invalid-feedback">
-														{form.errors.certificate && form.touched.certificate
-															? form.errors.certificate
-															: null}
+														{form.errors.certificate}
 													</div>
-												) : null}
+												)}
 											</div>
 										)}
 									</Field>
@@ -208,7 +206,7 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 							</div>
 						</Modal.Body>
 						<Modal.Footer>
-							<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+							<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 								<T id="cancel" />
 							</Button>
 							<Button
@@ -226,7 +224,8 @@ const CustomCertificateModal = EasyModal.create(({ visible, remove }: InnerModal
 				)}
 			</Formik>
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showCustomCertificateModal };

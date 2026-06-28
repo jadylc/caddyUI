@@ -12,7 +12,9 @@ import {
 } from "src/components";
 import { useDeadHost, useSetDeadHost } from "src/hooks";
 import { T } from "src/locale";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const showDeadHostModal = (id: number | "new") => {
 	EasyModal.show(DeadHostModal, { id });
@@ -22,6 +24,7 @@ interface Props extends InnerModalProps {
 	id: number | "new";
 }
 const DeadHostModal = EasyModal.create(({ id, visible, remove }: Props) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const { data, isLoading, error } = useDeadHost(id);
 	const { mutate: setDeadHost } = useSetDeadHost();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
@@ -57,7 +60,7 @@ const DeadHostModal = EasyModal.create(({ id, visible, remove }: Props) => {
 	};
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}
@@ -81,6 +84,7 @@ const DeadHostModal = EasyModal.create(({ id, visible, remove }: Props) => {
 				>
 					{() => (
 						<Form>
+							<DirtySync dirtyRef={dirtyRef} />
 							<Modal.Header closeButton>
 								<Modal.Title>
 									<T id={data?.id ? "object.edit" : "object.add"} tData={{ object: "dead-host" }} />
@@ -132,7 +136,7 @@ const DeadHostModal = EasyModal.create(({ id, visible, remove }: Props) => {
 								</div>
 							</Modal.Body>
 							<Modal.Footer>
-								<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+								<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 									<T id="cancel" />
 								</Button>
 								<Button
@@ -151,7 +155,8 @@ const DeadHostModal = EasyModal.create(({ id, visible, remove }: Props) => {
 				</Formik>
 			)}
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showDeadHostModal };

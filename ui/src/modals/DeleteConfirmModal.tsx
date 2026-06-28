@@ -44,7 +44,7 @@ const DeleteConfirmModal = EasyModal.create(
 		};
 
 		return (
-			<Modal show={visible} onHide={remove} backdrop="static" keyboard={false}>
+			<Modal show={visible} onHide={remove} backdrop="static" keyboard={!isSubmitting}>
 				<Modal.Header closeButton>
 					<Modal.Title>{tTitle ? <T id={tTitle} /> : title ? title : null}</Modal.Title>
 				</Modal.Header>

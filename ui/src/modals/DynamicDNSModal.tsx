@@ -10,8 +10,10 @@ import type { DNSProvider } from "src/api/backend/models";
 import { Button, Loading } from "src/components";
 import { useDnsProviders, useDynamicDNSItem, useSetDynamicDNSItem } from "src/hooks";
 import { intl, T } from "src/locale";
-import { validateString } from "src/modules/Validations";
+import { validateDuration, validateString } from "src/modules/Validations";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const showDynamicDNSModal = (id: number | "new") => {
 	EasyModal.show(DynamicDNSModal, { id });
@@ -30,6 +32,7 @@ interface Props extends InnerModalProps {
 }
 
 const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useDynamicDNSItem(id);
 	const { data: dnsProviders, isLoading: providersLoading } = useDnsProviders();
@@ -47,6 +50,13 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 
 	const onSubmit = async (values: any, { setSubmitting }: any) => {
 		if (isSubmitting) return;
+
+		// Validate provider selection
+		if (!values.credentialId && !values.dnsProvider) {
+			setErrorMsg(<T id="dynamic-dns.error.provider-required" />);
+			return;
+		}
+
 		setIsSubmitting(true);
 		setErrorMsg(null);
 
@@ -115,7 +125,7 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 	};
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}
@@ -178,6 +188,7 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 
 						return (
 							<Form>
+								<DirtySync dirtyRef={dirtyRef} />
 								<Modal.Header closeButton>
 									<Modal.Title>
 										<T
@@ -330,42 +341,50 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 											<T id="dynamic-dns.credential-add" />
 										</a>
 									</div>
-									<Field name="domainNames">
-										{({ field }: any) => (
+									<Field name="domainNames" validate={(v: string) => !v?.trim() ? intl.formatMessage({ id: "error.required" }) : undefined}>
+										{({ field, form }: any) => (
 											<div className="mb-3">
 												<label className="form-label" htmlFor="dynamicDnsDomains">
 													<T id="dynamic-dns.domains" />
 												</label>
 												<textarea
 													id="dynamicDnsDomains"
-													className="form-control"
+													className={`form-control ${form.errors.domainNames && form.touched.domainNames ? "is-invalid" : ""}`}
 													rows={3}
 													required
 													{...field}
 												/>
-												<small className="text-muted">
-													<T id="dynamic-dns.domains.help" />
-												</small>
+												{form.errors.domainNames && form.touched.domainNames ? (
+													<div className="invalid-feedback">{form.errors.domainNames}</div>
+												) : (
+													<small className="text-muted">
+														<T id="dynamic-dns.domains.help" />
+													</small>
+												)}
 											</div>
 										)}
 									</Field>
 									<div className="row">
 										<div className="col-md-6">
-											<Field name="checkInterval">
-												{({ field }: any) => (
+											<Field name="checkInterval" validate={validateDuration()}>
+												{({ field, form }: any) => (
 													<div className="mb-3">
 														<label className="form-label" htmlFor="checkInterval">
 															<T id="dynamic-dns.check-interval" />
 														</label>
 														<input
 															id="checkInterval"
-															className="form-control"
+															className={`form-control ${form.errors.checkInterval && form.touched.checkInterval ? "is-invalid" : ""}`}
 															required
 															{...field}
 														/>
-														<small className="text-muted">
-															<T id="dynamic-dns.check-interval.help" />
-														</small>
+														{form.errors.checkInterval && form.touched.checkInterval ? (
+															<div className="invalid-feedback">{form.errors.checkInterval}</div>
+														) : (
+															<small className="text-muted">
+																<T id="dynamic-dns.check-interval.help" />
+															</small>
+														)}
 													</div>
 												)}
 											</Field>
@@ -487,7 +506,7 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 									</div>
 								</Modal.Body>
 								<Modal.Footer>
-									<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+									<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 										<T id="cancel" />
 									</Button>
 									<Button
@@ -506,7 +525,8 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 				</Formik>
 			)}
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showDynamicDNSModal };

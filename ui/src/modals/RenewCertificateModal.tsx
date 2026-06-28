@@ -49,7 +49,7 @@ const RenewCertificateModal = EasyModal.create(({ id, visible, remove }: Props) 
 	}, [id, data, isFresh, isSubmitting, remove, queryClient]);
 
 	return (
-		<Modal show={visible} onHide={isSubmitting ? undefined : remove} backdrop="static" keyboard={false}>
+		<Modal show={visible} onHide={isSubmitting ? undefined : remove} backdrop="static" keyboard={!isSubmitting}>
 			<Modal.Header closeButton={!isSubmitting}>
 				<Modal.Title>
 					<T id="certificate.renew" />

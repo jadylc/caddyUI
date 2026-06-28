@@ -100,4 +100,15 @@ const validateDomains = (allowWildcards = false, maxDomains?: number) => {
 	};
 };
 
-export { validateEmail, validateNumber, validateString, validateDomains, validateDomain };
+const validateDuration = () => {
+	return (value: string): string | undefined => {
+		if (!value?.trim()) {
+			return intl.formatMessage({ id: "error.required" });
+		}
+		if (!/^\d+[smhd]$/i.test(value.trim())) {
+			return intl.formatMessage({ id: "error.invalid-duration" });
+		}
+	};
+};
+
+export { validateEmail, validateNumber, validateString, validateDomains, validateDomain, validateDuration };

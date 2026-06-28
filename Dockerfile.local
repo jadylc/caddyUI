@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+# Offline rebuild: reuse existing caddy binary/plugins from lc121a/caddy-ui:latest
+# and overlay freshly built UI + backend API artifacts.
+
+FROM alpine:3.20
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories \
+    && apk add --no-cache ca-certificates mailcap tzdata \
+    && mkdir -p /data/caddy /config/caddy /config/sites /etc/caddy/global.d /srv/ui
+
+# Caddy binary with all plugins (extracted from existing image)
+COPY dist/caddy /usr/bin/caddy
+RUN chmod +x /usr/bin/caddy
+
+# Latest UI assets (rebuilt locally)
+COPY ui/dist /srv/ui
+
+# Latest backend API binary (rebuilt locally for linux/amd64)
+COPY dist/caddy-api /usr/bin/caddy-api
+RUN chmod +x /usr/bin/caddy-api
+
+# Caddy configuration and startup script
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Caddy default storage location
+ENV XDG_CONFIG_HOME=/config XDG_DATA_HOME=/data TZ=Asia/Shanghai
+
+EXPOSE 8888
+ENTRYPOINT ["/entrypoint.sh"]

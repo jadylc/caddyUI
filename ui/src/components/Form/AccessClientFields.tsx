@@ -5,12 +5,23 @@ import { useState } from "react";
 import type { AccessListClient } from "src/api/backend";
 import { intl, T } from "src/locale";
 
+type FieldErrors = Record<number, Record<string, string>>;
+
+function validateClient(_idx: number, item: AccessListClient): Record<string, string> {
+	const errs: Record<string, string> = {};
+	if (!item.address?.trim()) {
+		errs.address = "access-list.error.address-required";
+	}
+	return errs;
+}
+
 interface Props {
 	initialValues: AccessListClient[];
 	name?: string;
 }
 export function AccessClientFields({ initialValues, name = "clients" }: Props) {
 	const [values, setValues] = useState<AccessListClient[]>(initialValues || []);
+	const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 	const { setFieldValue } = useFormikContext();
 
 	const blankClient: AccessListClient = { directive: "allow", address: "" };
@@ -30,6 +41,15 @@ export function AccessClientFields({ initialValues, name = "clients" }: Props) {
 		}
 		setValues(newValues);
 		setFormField(newValues);
+		setFieldErrors((prev) => {
+			const next: FieldErrors = {};
+			Object.entries(prev).forEach(([k, v]) => {
+				const numKey = Number(k);
+				if (numKey < idx) next[numKey] = v;
+				else if (numKey > idx) next[numKey - 1] = v;
+			});
+			return next;
+		});
 	};
 
 	const handleChange = (idx: number, field: string, fieldValue: string) => {
@@ -38,12 +58,24 @@ export function AccessClientFields({ initialValues, name = "clients" }: Props) {
 		);
 		setValues(newValues);
 		setFormField(newValues);
+		const errs = validateClient(idx, newValues[idx]);
+		setFieldErrors((prev) => {
+			const next = { ...prev };
+			if (Object.keys(errs).length > 0) {
+				next[idx] = errs;
+			} else {
+				delete next[idx];
+			}
+			return next;
+		});
 	};
 
 	const setFormField = (newValues: AccessListClient[]) => {
 		const filtered = newValues.filter((v: AccessListClient) => v?.address?.trim() !== "");
 		setFieldValue(name, filtered);
 	};
+
+	const err = (idx: number, field: string) => fieldErrors[idx]?.[field];
 
 	return (
 		<>
@@ -76,13 +108,18 @@ export function AccessClientFields({ initialValues, name = "clients" }: Props) {
 							<input
 								name={`clients[${idx}].address`}
 								type="text"
-								className="form-control"
+								className={`form-control ${err(idx, "address") ? "is-invalid" : ""}`}
 								autoComplete="off"
 								value={client.address}
 								onChange={(e) => handleChange(idx, "address", e.target.value)}
 								placeholder={intl.formatMessage({ id: "access-list.rule-source.placeholder" })}
 							/>
 						</div>
+						{err(idx, "address") && (
+							<div className="text-danger mt-n1 mb-1" style={{ fontSize: "0.875em" }}>
+								<T id={err(idx, "address")!} />
+							</div>
+						)}
 					</div>
 					<div className="col-1">
 						<a

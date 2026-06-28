@@ -15,9 +15,11 @@ import {
 } from "src/components";
 import { type ForwardAuthProviderID, forwardAuthProviders } from "src/forwardAuthProviders";
 import { useAutheliaSettings, useAuthentikSettings, useProxyHost, useSetProxyHost } from "src/hooks";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { T } from "src/locale";
 import { validateNumber, validateString } from "src/modules/Validations";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const providerOptions = Object.values(forwardAuthProviders);
 
@@ -146,6 +148,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 	const { mutate: setProxyHost } = useSetProxyHost();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 
 	const defaultForwardAuth = {
 		enabled: false,
@@ -215,8 +218,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 		});
 	};
 
-	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+	return (<>
+		<Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}
@@ -276,6 +279,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 				>
 					{() => (
 						<Form>
+							<DirtySync dirtyRef={dirtyRef} />
 							<Modal.Header closeButton>
 								<Modal.Title>
 									<T
@@ -559,7 +563,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 								</div>
 							</Modal.Body>
 							<Modal.Footer>
-								<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+								<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 									<T id="cancel" />
 								</Button>
 								<Button
@@ -578,7 +582,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 				</Formik>
 			)}
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showProxyHostModal };

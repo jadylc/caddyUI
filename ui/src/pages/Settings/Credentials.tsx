@@ -14,7 +14,9 @@ import {
 } from "src/api/backend";
 import { Button, LoadingPage } from "src/components";
 import { showHelpModal } from "src/modals";
+import { ConfirmDiscardModal } from "src/modals/ConfirmDiscardModal";
 import { showError, showSuccess } from "src/notifications";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 
 const emptyCredential: CredentialDetail = {
 	id: "",
@@ -106,6 +108,16 @@ export default function CredentialsSettingsPage() {
 	const [showForm, setShowForm] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [loadingID, setLoadingID] = useState("");
+
+	const closeForm = () => {
+		dirtyRef.current = false;
+		setDraft(emptyCredential);
+		setVisibleSecrets({});
+		setShowForm(false);
+	};
+
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(closeForm);
+
 	const { data, isLoading, isError, error } = useQuery({
 		queryKey: ["credentials"],
 		queryFn: getCredentials,
@@ -118,13 +130,12 @@ export default function CredentialsSettingsPage() {
 		queryClient.invalidateQueries({ queryKey: ["credentials"] });
 		queryClient.invalidateQueries({ queryKey: ["dns-providers"] });
 	};
-	const updateDraft = (key: keyof CredentialDetail, value: any) => setDraft((prev) => ({ ...prev, [key]: value }));
-	const closeForm = () => {
-		setDraft(emptyCredential);
-		setVisibleSecrets({});
-		setShowForm(false);
+	const updateDraft = (key: keyof CredentialDetail, value: any) => {
+		dirtyRef.current = true;
+		setDraft((prev) => ({ ...prev, [key]: value }));
 	};
 	const openNew = () => {
+		dirtyRef.current = false;
 		setDraft(emptyCredential);
 		setVisibleSecrets({});
 		setShowForm(true);
@@ -136,6 +147,7 @@ export default function CredentialsSettingsPage() {
 		try {
 			setDraft(await getCredential(id));
 			setVisibleSecrets({});
+			dirtyRef.current = false;
 			setShowForm(true);
 		} catch (err: any) {
 			showError(err.message);
@@ -153,6 +165,7 @@ export default function CredentialsSettingsPage() {
 			} else {
 				await createCredential(payload);
 			}
+			dirtyRef.current = false;
 			closeForm();
 			refresh();
 			showSuccess("凭据已保存");
@@ -320,7 +333,7 @@ export default function CredentialsSettingsPage() {
 					</div>
 				</div>
 			</div>
-			<Modal show={showForm} onHide={closeForm} backdrop="static" keyboard={!saving} centered size="lg">
+			<Modal show={showForm} onHide={handleClose} backdrop="static" keyboard centered size="lg">
 				<Modal.Header closeButton>
 					<Modal.Title>{draft.id ? "编辑凭据" : "新增凭据"}</Modal.Title>
 				</Modal.Header>
@@ -358,7 +371,7 @@ export default function CredentialsSettingsPage() {
 					<div className="row mt-3">{providerFields}</div>
 				</Modal.Body>
 				<Modal.Footer>
-					<Button onClick={closeForm} disabled={saving}>
+					<Button onClick={handleClose} disabled={saving}>
 						取消
 					</Button>
 					<Button actionType="primary" onClick={save} isLoading={saving} disabled={saving}>
@@ -366,6 +379,7 @@ export default function CredentialsSettingsPage() {
 					</Button>
 				</Modal.Footer>
 			</Modal>
+			<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
 			<div className="table-responsive">
 				<table className="table card-table table-vcenter">
 					<thead>

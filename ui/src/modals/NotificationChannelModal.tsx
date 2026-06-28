@@ -9,7 +9,9 @@ import {
 	updateNotificationChannel,
 } from "src/api/backend";
 import { Button } from "src/components";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showSuccess } from "src/notifications";
+import { ConfirmDiscardModal } from "./ConfirmDiscardModal";
 
 export const notificationChannelTypes = [
 	{ value: "webhook", label: "Webhook" },
@@ -64,12 +66,30 @@ const initialChannel = (channel?: NotificationChannel): NotificationChannel => (
 });
 
 const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, events, onSaved }: Props) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const [draft, setDraft] = useState<NotificationChannel>(() => initialChannel(channel));
 	const [saving, setSaving] = useState(false);
 	const [errorMsg, setErrorMsg] = useState("");
+	const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 	const isEdit = !!draft.id;
 
-	const updateDraft = (key: keyof NotificationChannel, value: any) => setDraft((prev) => ({ ...prev, [key]: value }));
+	const validate = (d: NotificationChannel): Record<string, string> => {
+		const errs: Record<string, string> = {};
+		if (!d.name?.trim()) errs.name = "error.required";
+		if (needsURL(d.type) && !d.url?.trim()) errs.url = "error.required";
+		if (needsToken(d.type) && !d.token?.trim()) errs.token = "error.required";
+		if (needsChatID(d.type) && !d.chatId?.trim()) errs.chatId = "error.required";
+		return errs;
+	};
+
+	const updateDraft = (key: keyof NotificationChannel, value: any) => {
+		dirtyRef.current = true;
+		setDraft((prev) => {
+			const next = { ...prev, [key]: value };
+			setFieldErrors(validate(next));
+			return next;
+		});
+	};
 
 	const toggleEvent = (event: string) => {
 		const selectedEvents = draft.events || [];
@@ -83,6 +103,9 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 
 	const save = async () => {
 		if (saving) return;
+		const errs = validate(draft);
+		setFieldErrors(errs);
+		if (Object.keys(errs).length > 0) return;
 		setSaving(true);
 		setErrorMsg("");
 		try {
@@ -102,7 +125,7 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 	};
 
 	return (
-		<Modal show={visible} onHide={saving ? undefined : remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			<form
 				onSubmit={(event) => {
 					event.preventDefault();
@@ -123,11 +146,13 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 							</label>
 							<input
 								id="notifyName"
-								className="form-control"
+								className={`form-control ${fieldErrors.name ? "is-invalid" : ""}`}
 								value={draft.name}
-								required
 								onChange={(event) => updateDraft("name", event.target.value)}
 							/>
+							{fieldErrors.name && (
+								<div className="invalid-feedback d-block">此项为必填</div>
+							)}
 						</div>
 						<div className="col-md-4">
 							<label className="form-label required" htmlFor="notifyType">
@@ -165,11 +190,13 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 								</label>
 								<input
 									id="notifyUrl"
-									className="form-control"
+									className={`form-control ${fieldErrors.url ? "is-invalid" : ""}`}
 									value={draft.url || ""}
-									required
 									onChange={(event) => updateDraft("url", event.target.value)}
 								/>
+								{fieldErrors.url && (
+									<div className="invalid-feedback d-block">此项为必填</div>
+								)}
 							</div>
 						) : null}
 						{needsToken(draft.type) ? (
@@ -179,12 +206,14 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 								</label>
 								<input
 									id="notifyToken"
-									className="form-control"
+									className={`form-control ${fieldErrors.token ? "is-invalid" : ""}`}
 									type="password"
 									value={draft.token || ""}
-									required
 									onChange={(event) => updateDraft("token", event.target.value)}
 								/>
+								{fieldErrors.token && (
+									<div className="invalid-feedback d-block">此项为必填</div>
+								)}
 							</div>
 						) : null}
 						{needsChatID(draft.type) ? (
@@ -194,11 +223,13 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 								</label>
 								<input
 									id="notifyChatId"
-									className="form-control"
+									className={`form-control ${fieldErrors.chatId ? "is-invalid" : ""}`}
 									value={draft.chatId || ""}
-									required
 									onChange={(event) => updateDraft("chatId", event.target.value)}
 								/>
+								{fieldErrors.chatId && (
+									<div className="invalid-feedback d-block">此项为必填</div>
+								)}
 							</div>
 						) : null}
 						<div className="col-md-6">
@@ -280,7 +311,7 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 					</div>
 				</Modal.Body>
 				<Modal.Footer>
-					<Button onClick={remove} disabled={saving}>
+					<Button onClick={handleClose} disabled={saving}>
 						取消
 					</Button>
 					<Button type="submit" actionType="primary" isLoading={saving} disabled={saving}>
@@ -289,7 +320,8 @@ const NotificationChannelModal = EasyModal.create(({ visible, remove, channel, e
 				</Modal.Footer>
 			</form>
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showNotificationChannelModal };

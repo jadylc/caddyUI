@@ -9,7 +9,9 @@ import { AccessClientFields, BasicAuthFields, Button, Loading } from "src/compon
 import { useAccessList, useSetAccessList } from "src/hooks";
 import { intl, T } from "src/locale";
 import { validateString } from "src/modules/Validations";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const showAccessListModal = (id: number | "new") => {
 	EasyModal.show(AccessListModal, { id });
@@ -19,6 +21,7 @@ interface Props extends InnerModalProps {
 	id: number | "new";
 }
 const AccessListModal = EasyModal.create(({ id, visible, remove }: Props) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const { data, isLoading, error } = useAccessList(id, ["items", "clients"]);
 	const { mutate: setAccessList } = useSetAccessList();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
@@ -86,7 +89,7 @@ const AccessListModal = EasyModal.create(({ id, visible, remove }: Props) => {
 	const toggleEnabled = cn(toggleClasses, "bg-cyan");
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}
@@ -108,6 +111,7 @@ const AccessListModal = EasyModal.create(({ id, visible, remove }: Props) => {
 				>
 					{({ setFieldValue }: any) => (
 						<Form>
+							<DirtySync dirtyRef={dirtyRef} />
 							<Modal.Header closeButton>
 								<Modal.Title>
 									<T id={data?.id ? "object.edit" : "object.add"} tData={{ object: "access-list" }} />
@@ -267,7 +271,7 @@ const AccessListModal = EasyModal.create(({ id, visible, remove }: Props) => {
 								</div>
 							</Modal.Body>
 							<Modal.Footer>
-								<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+								<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 									<T id="cancel" />
 								</Button>
 								<Button
@@ -286,7 +290,8 @@ const AccessListModal = EasyModal.create(({ id, visible, remove }: Props) => {
 				</Formik>
 			)}
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showAccessListModal };

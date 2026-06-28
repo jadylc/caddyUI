@@ -219,47 +219,6 @@
   resolved "https://registry.npmmirror.com/@floating-ui/utils/-/utils-0.2.11.tgz"
   integrity sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==
 
-"@formatjs/cli-native-win32-x64@1.1.1":
-  version "1.1.1"
-  resolved "https://registry.npmmirror.com/@formatjs/cli-native-win32-x64/-/cli-native-win32-x64-1.1.1.tgz"
-  integrity sha512-2vYgm7dzAb7wA9KjOOJGxZiSShwBNK4dEmgiJ1lRpEIz6RKMZ6wBY4UVn03VdAv8djJ7r6RK4Xyd2ouGcbh9Bg==
-
-"@formatjs/cli@^6.15.0":
-  version "6.16.3"
-  resolved "https://registry.npmmirror.com/@formatjs/cli/-/cli-6.16.3.tgz"
-  integrity sha512-AN6uZR1xnl3V215HHJiKiA+DvNMrO/XfQ7hOyq3gXfHJwKSgLLQFtSFxw9A1O0SaGC2E2Kwo4mqwS1ZCLGe/qw==
-  optionalDependencies:
-    "@formatjs/cli-native-darwin-arm64" "1.1.0"
-    "@formatjs/cli-native-linux-arm64" "1.2.0"
-    "@formatjs/cli-native-linux-x64" "1.1.0"
-    "@formatjs/cli-native-win32-x64" "1.1.1"
-
-"@formatjs/fast-memoize@3.1.5":
-  version "3.1.5"
-  resolved "https://registry.npmmirror.com/@formatjs/fast-memoize/-/fast-memoize-3.1.5.tgz"
-  integrity sha512-KLi3fan6WnCHmigd9pmEEN8Hid0v4wiFBW576M/d07KMWYecf1CvyMI3n34vCmHT4AoVqG2n702kiHbXjzZX2A==
-
-"@formatjs/icu-messageformat-parser@3.5.10":
-  version "3.5.10"
-  resolved "https://registry.npmmirror.com/@formatjs/icu-messageformat-parser/-/icu-messageformat-parser-3.5.10.tgz"
-  integrity sha512-XeJihYLy1lCe19xfK1KWKG/betBOK2rB0luL8lSkjfvJj0zP+LTJvkC+RKd0jsFI8mWxN71LrarHSrEXE8xxOQ==
-  dependencies:
-    "@formatjs/icu-skeleton-parser" "2.1.9"
-
-"@formatjs/icu-skeleton-parser@2.1.9":
-  version "2.1.9"
-  resolved "https://registry.npmmirror.com/@formatjs/icu-skeleton-parser/-/icu-skeleton-parser-2.1.9.tgz"
-  integrity sha512-rsxswgHMfU1zUgB2byc08fesf83wLGjFnzLCEtuf00mx2doiqc6pYrf67raI37XqdRcGUviQepk2UKGqpng74Q==
-
-"@formatjs/intl@4.1.12":
-  version "4.1.12"
-  resolved "https://registry.npmmirror.com/@formatjs/intl/-/intl-4.1.12.tgz"
-  integrity sha512-r288ut+p+CUQZSg+0gAT+D0i6xgrnoxE0B4HTbPY2zei/AtYmFhlu87BKjgCf1CweH4pZIbr152JFjxO8jVb1A==
-  dependencies:
-    "@formatjs/fast-memoize" "3.1.5"
-    "@formatjs/icu-messageformat-parser" "3.5.10"
-    intl-messageformat "11.2.7"
-
 "@internationalized/date@^3.12.1":
   version "3.12.1"
   resolved "https://registry.npmmirror.com/@internationalized/date/-/date-3.12.1.tgz"
@@ -625,7 +584,7 @@
   resolved "https://registry.npmmirror.com/@types/react-transition-group/-/react-transition-group-4.4.12.tgz"
   integrity sha512-8TV6R3h2j7a91c+1DXdJi3Syo69zzIZbz7Lg5tORM5LEJG7X/E6a1V3drRyBRZq7/utz7A+c4OgYLiLcYGHG6w==
 
-"@types/react@*", "@types/react@^18.0.0 || ^19.0.0", "@types/react@^19.2.0", "@types/react@^19.2.14", "@types/react@>=16.14.8", "@types/react@>=16.9.11", "@types/react@>=18", "@types/react@19":
+"@types/react@*", "@types/react@^18.0.0 || ^19.0.0", "@types/react@^19.2.0", "@types/react@^19.2.14", "@types/react@>=16.14.8", "@types/react@>=16.9.11", "@types/react@>=18":
   version "19.2.15"
   resolved "https://registry.npmmirror.com/@types/react/-/react-19.2.15.tgz"
   integrity sha512-eRwcGNHve+E8qtEQSSRl6urh+rFop4v8gm6O8rGv25CodbvFdLjA1vVQ1KkiFE0w0UPOnb8tDiFKL5lp0rtY5Q==
@@ -1268,14 +1227,6 @@ inline-style-parser@0.2.7:
   version "0.2.7"
   resolved "https://registry.npmmirror.com/inline-style-parser/-/inline-style-parser-0.2.7.tgz"
   integrity sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==
-
-intl-messageformat@11.2.7:
-  version "11.2.7"
-  resolved "https://registry.npmmirror.com/intl-messageformat/-/intl-messageformat-11.2.7.tgz"
-  integrity sha512-+q6Ktg119nULZEpZ8YTuGOst9MyEzFtjD63FTGBlN1mLz0Z/MOUYDIvnpVKwq17eezIEh+cfJIebfJoCetpiNw==
-  dependencies:
-    "@formatjs/fast-memoize" "3.1.5"
-    "@formatjs/icu-messageformat-parser" "3.5.10"
 
 invariant@^2.2.4:
   version "2.2.4"
@@ -1981,15 +1932,6 @@ react-fast-compare@^2.0.1:
   resolved "https://registry.npmmirror.com/react-fast-compare/-/react-fast-compare-2.0.4.tgz"
   integrity sha512-suNP+J1VU1MWFKcyt7RtjiSWUjvidmQSlqu+eHslq+342xCbGTYmC0mEhPCOHxlW0CywylOC1u2DFAT+bv4dBw==
 
-react-intl@^10.1.6:
-  version "10.1.9"
-  resolved "https://registry.npmmirror.com/react-intl/-/react-intl-10.1.9.tgz"
-  integrity sha512-FOWpTmwnZnAfz8JegRzyGnjUiuzLW3xJFjp/o8VR4HZAQ+Eg++YaeMhoUULLY+LMx7gZm3czaZEqcU4hntwerw==
-  dependencies:
-    "@formatjs/icu-messageformat-parser" "3.5.10"
-    "@formatjs/intl" "4.1.12"
-    intl-messageformat "11.2.7"
-
 react-is@^16.13.1, react-is@^16.3.2, react-is@^16.7.0:
   version "16.13.1"
   resolved "https://registry.npmmirror.com/react-is/-/react-is-16.13.1.tgz"
@@ -2081,7 +2023,7 @@ react-transition-group@^4.3.0, react-transition-group@^4.4.5:
     loose-envify "^1.4.0"
     prop-types "^15.6.2"
 
-"react@^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react@^16.8.0 || ^17.0.0-rc.1 || ^18.0.0 || ^19.0.0-rc.1", "react@^18 || ^19", "react@^18.0.0 || ^19.0.0", react@^19.2.6, "react@>= 16", react@>=0.14.0, react@>=15.0.0, react@>=16.14.0, react@>=16.6.0, react@>=16.8, react@>=16.8.0, react@>=16.9.0, react@>=18, react@>16.8.0, react@19:
+"react@^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react@^16.8.0 || ^17.0.0-rc.1 || ^18.0.0 || ^19.0.0-rc.1", "react@^18 || ^19", "react@^18.0.0 || ^19.0.0", react@^19.2.6, "react@>= 16", react@>=0.14.0, react@>=15.0.0, react@>=16.14.0, react@>=16.6.0, react@>=16.8, react@>=16.8.0, react@>=16.9.0, react@>=18, react@>16.8.0:
   version "19.2.6"
   resolved "https://registry.npmmirror.com/react/-/react-19.2.6.tgz"
   integrity sha512-sfWGGfavi0xr8Pg0sVsyHMAOziVYKgPLNrS7ig+ivMNb3wbCBw3KxtflsGBAwD3gYQlE/AEZsTLgToRrSCjb0Q==

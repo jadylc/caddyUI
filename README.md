@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://hub.docker.com/r/lc121a/caddy-ui"><img src="https://img.shields.io/badge/docker-lc121a%2Fcaddy--ui-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
+  <a href="https://github.com/jadylc/caddyUI"><img src="https://img.shields.io/badge/GitHub-jadylc%2FcaddyUI-181717?logo=github&logoColor=white" alt="GitHub repo"></a>
   <img src="https://img.shields.io/badge/Caddy-custom%20build-1F88C0?logo=caddy&logoColor=white" alt="Custom Caddy build">
   <img src="https://img.shields.io/badge/platform-amd64%20%7C%20arm64-3FB950" alt="amd64 and arm64">
   <img src="https://img.shields.io/badge/UI-Chinese-FFB020" alt="Chinese UI">

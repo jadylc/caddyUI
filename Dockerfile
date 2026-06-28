@@ -12,8 +12,11 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM caddy:builder AS caddy-builder
 ARG TARGETOS
 ARG TARGETARCH
-ARG GOPROXY=https://goproxy.cn,direct
-ENV GOPROXY=$GOPROXY
+ARG GOPROXY=http://goproxy.cn,direct
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY="*"
+ENV GOPROXY=$GOPROXY HTTP_PROXY="" HTTPS_PROXY="" NO_PROXY="*"
 # Patch dnspod provider: support delegated zones and stable libdns return records
 COPY patches/dnspod-patched.go /tmp/dnspod-patched.go
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -43,8 +46,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS api-builder
 ARG TARGETOS
 ARG TARGETARCH
-ARG GOPROXY=https://goproxy.cn,direct
-ENV GOPROXY=$GOPROXY
+ARG GOPROXY=http://goproxy.cn,direct
+# 清除 Docker Desktop 注入的失效代理，避免 Go 模块下载 TLS 超时
+ENV GOPROXY=$GOPROXY HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy=""
 WORKDIR /build
 COPY backend/go.mod ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

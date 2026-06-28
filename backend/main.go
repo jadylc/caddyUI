@@ -111,6 +111,16 @@ type IssuerConfig struct {
 	ZeroSSLAPIKey string `json:"zerossl_api_key,omitempty"`
 }
 
+// ProxyLocation 反代路径规则，允许同一站点下多个路径指向不同后端。
+type ProxyLocation struct {
+	Path          string `json:"path"`
+	ForwardScheme string `json:"forward_scheme,omitempty"`
+	ForwardHost   string `json:"forward_host"`
+	ForwardPort   int    `json:"forward_port"`
+	ForwardPath   string `json:"forward_path,omitempty"` // 目标路径重写，如 /B 表示 /A → /B
+	Backend       string `json:"backend,omitempty"`      // 计算字段: scheme://host:port[/path]
+}
+
 // Site 反代条目。
 type Site struct {
 	CreatedOn                  string               `json:"created_on,omitempty"`
@@ -121,6 +131,7 @@ type Site struct {
 	Domain                     string               `json:"domain"`
 	Path                       string               `json:"path,omitempty"`
 	Backend                    string               `json:"backend"`
+	Locations                  []ProxyLocation        `json:"locations,omitempty"`
 	RedirectURL                string               `json:"redirect_url,omitempty"`
 	RedirectCode               int                  `json:"redirect_code,omitempty"`
 	PreservePath               bool                 `json:"preserve_path,omitempty"`
@@ -2082,6 +2093,11 @@ func writeSiteRouteContent(b *strings.Builder, s Site, blockInner string) error 
 		return nil
 	}
 
+	// 多路径模式：优先使用 Locations
+	if len(s.Locations) > 0 {
+		return writeMultiLocationRouteContent(b, s, blockInner)
+	}
+
 	inner := blockInner
 	path := strings.TrimSpace(s.Path)
 	if path != "" {
@@ -2106,6 +2122,115 @@ func writeSiteRouteContent(b *strings.Builder, s Site, blockInner string) error 
 
 	if path != "" {
 		fmt.Fprintf(b, "%s}\n", blockInner)
+	}
+	return nil
+}
+
+func writeMultiLocationRouteContent(b *strings.Builder, s Site, blockInner string) error {
+	var defaultLoc *ProxyLocation
+	var pathLocs []ProxyLocation
+	for i, loc := range s.Locations {
+		if strings.TrimSpace(loc.Path) == "" {
+			defaultLoc = &s.Locations[i]
+		} else {
+			pathLocs = append(pathLocs, loc)
+		}
+	}
+
+	if err := writeForwardAuthPublicRoutes(b, s, blockInner); err != nil {
+		return err
+	}
+
+	// 按路径长度降序排列，确保更具体的路径优先匹配（如 /api/v2 排在 /api 前面）
+	sort.Slice(pathLocs, func(i, j int) bool {
+		return len(pathLocs[i].Path) > len(pathLocs[j].Path)
+	})
+
+	for _, loc := range pathLocs {
+		locPath := strings.TrimRight(loc.Path, "/")
+		if locPath == "" {
+			locPath = "/"
+		}
+		inner := blockInner + "    "
+		fp := strings.TrimSpace(loc.ForwardPath)
+		if fp != "" {
+			fp = strings.TrimRight(fp, "/")
+		}
+		if locPath != "/" {
+			// 精确路径: /hh → 重写到 forwardPath（如 /pricing）
+			fmt.Fprintf(b, "%shandle_path %s {\n", blockInner, locPath)
+			if fp != "" {
+				fmt.Fprintf(b, "%srewrite * %s\n", inner, fp)
+			}
+			if err := writeLocationReverseProxy(b, s, loc, inner); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%s}\n", blockInner)
+			// 子路径: /hh/test → 重写到 /pricing/test
+			fmt.Fprintf(b, "%shandle_path %s/* {\n", blockInner, locPath)
+			if fp != "" {
+				fmt.Fprintf(b, "%srewrite * %s{uri}\n", inner, fp)
+			}
+			if err := writeLocationReverseProxy(b, s, loc, inner); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%s}\n", blockInner)
+		} else {
+			// 根路径 location
+			fmt.Fprintf(b, "%shandle_path / {\n", blockInner)
+			if fp != "" {
+				fmt.Fprintf(b, "%srewrite * %s\n", inner, fp)
+			}
+			if err := writeLocationReverseProxy(b, s, loc, inner); err != nil {
+				return err
+			}
+			fmt.Fprintf(b, "%s}\n", blockInner)
+		}
+	}
+
+	if defaultLoc != nil {
+		return writeLocationReverseProxy(b, s, *defaultLoc, blockInner)
+	}
+	accessList, hasAccessList := accessListByID(s.AccessListID)
+	if hasAccessList {
+		if err := writeAccessListBlock(b, accessList, blockInner); err != nil {
+			return err
+		}
+	}
+	return writeProtectedReverseProxyBlock(b, s, blockInner, false)
+}
+
+func writeLocationReverseProxy(b *strings.Builder, s Site, loc ProxyLocation, indent string) error {
+	backend := loc.Backend
+	if backend == "" {
+		backend = s.Backend
+	}
+	cleanBackend, _ := sanitizeBackendURL(backend)
+
+	accessList, hasAccessList := accessListByID(s.AccessListID)
+	if hasAccessList {
+		if err := writeAccessListBlock(b, accessList, indent); err != nil {
+			return err
+		}
+	}
+
+	needsInsecureSkipVerify := s.UpstreamInsecureSkipVerify && strings.HasPrefix(strings.ToLower(strings.TrimSpace(cleanBackend)), "https://")
+	// Extract host:port for Host header (strip scheme)
+	upstreamHostPort := cleanBackend
+	if idx := strings.Index(upstreamHostPort, "://"); idx != -1 {
+		upstreamHostPort = upstreamHostPort[idx+3:]
+	}
+	if !needsInsecureSkipVerify {
+		fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, cleanBackend)
+		fmt.Fprintf(b, "%s    header_up Host %s\n", indent, upstreamHostPort)
+		fmt.Fprintf(b, "%s}\n", indent)
+	} else {
+		fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, cleanBackend)
+		fmt.Fprintf(b, "%s    transport http {\n", indent)
+		fmt.Fprintf(b, "%s        tls_insecure_skip_verify\n", indent)
+		fmt.Fprintf(b, "%s    }\n", indent)
+		fmt.Fprintf(b, "%s    header_up Host %s\n", indent, upstreamHostPort)
+		fmt.Fprintf(b, "%s}\n", indent)
 	}
 	return nil
 }
@@ -2392,16 +2517,50 @@ func accessBasicAuthPasswordHash(password string) (string, error) {
 }
 
 func writeReverseProxyBlock(b *strings.Builder, backend string, _ string, upstreamInsecureSkipVerify bool, indent string) {
-	needsInsecureSkipVerify := upstreamInsecureSkipVerify && strings.HasPrefix(strings.ToLower(strings.TrimSpace(backend)), "https://")
+	cleanBackend, _ := sanitizeBackendURL(backend)
+	needsInsecureSkipVerify := upstreamInsecureSkipVerify && strings.HasPrefix(strings.ToLower(strings.TrimSpace(cleanBackend)), "https://")
+
 	if !needsInsecureSkipVerify {
-		fmt.Fprintf(b, "%sreverse_proxy %s\n", indent, backend)
-		return
+		fmt.Fprintf(b, "%sreverse_proxy %s\n", indent, cleanBackend)
+	} else {
+		fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, cleanBackend)
+		fmt.Fprintf(b, "%s    transport http {\n", indent)
+		fmt.Fprintf(b, "%s        tls_insecure_skip_verify\n", indent)
+		fmt.Fprintf(b, "%s    }\n", indent)
+		fmt.Fprintf(b, "%s}\n", indent)
 	}
-	fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, backend)
-	fmt.Fprintf(b, "%s    transport http {\n", indent)
-	fmt.Fprintf(b, "%s        tls_insecure_skip_verify\n", indent)
-	fmt.Fprintf(b, "%s    }\n", indent)
-	fmt.Fprintf(b, "%s}\n", indent)
+}
+
+// sanitizeBackendURL 从可能包含路径的 backend 中提取 scheme://host:port 部分，
+// 并返回需要在 reverse_proxy 中附加的 uri rewrite 指令（如果有路径的话）。
+func sanitizeBackendURL(raw string) (clean string, upstreamPath string) {
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "://") {
+		return raw, ""
+	}
+	schemeEnd := strings.Index(raw, "://")
+	scheme := raw[:schemeEnd]
+	rest := raw[schemeEnd+3:]
+
+	// 将 rest 拆为 host[:port] + path
+	hostPort := rest
+	upstreamPath = ""
+	if slash := strings.Index(rest, "/"); slash != -1 {
+		hostPort = rest[:slash]
+		upstreamPath = strings.TrimRight(rest[slash:], "/")
+	}
+
+	return scheme + "://" + hostPort, upstreamPath
+}
+
+// splitHostAndPath 从可能包含路径的 host 字段中分离出纯 host 和路径部分。
+// 例如 "10.0.0.1/environments" → ("10.0.0.1", "/environments")
+func splitHostAndPath(raw string) (host string, path string) {
+	raw = strings.TrimSpace(raw)
+	if slash := strings.Index(raw, "/"); slash != -1 {
+		return raw[:slash], strings.TrimRight(raw[slash:], "/")
+	}
+	return raw, ""
 }
 
 func writeProtectedReverseProxyBlock(b *strings.Builder, s Site, indent string, pathScoped bool) error {
@@ -4158,6 +4317,14 @@ type auditEntry struct {
 	User       npmUser        `json:"user,omitempty"`
 }
 
+type npmProxyLocation struct {
+	Path          string `json:"path"`
+	ForwardScheme string `json:"forward_scheme"`
+	ForwardHost   string `json:"forward_host"`
+	ForwardPort   int    `json:"forward_port"`
+	ForwardPath   string `json:"forward_path,omitempty"`
+}
+
 type npmProxyHost struct {
 	ID                         int               `json:"id"`
 	CreatedOn                  string            `json:"created_on"`
@@ -4169,8 +4336,9 @@ type npmProxyHost struct {
 	ListenPorts                []int             `json:"listen_ports,omitempty"`
 	ForwardScheme              string            `json:"forward_scheme"`
 	ForwardHost                string            `json:"forward_host"`
-	ForwardPort                int               `json:"forward_port"`
-	AccessListID               int               `json:"access_list_id"`
+	ForwardPort                int                `json:"forward_port"`
+	Locations                  []npmProxyLocation `json:"locations,omitempty"`
+	AccessListID               int                `json:"access_list_id"`
 	CertificateID              any               `json:"certificate_id"`
 	SSLForced                  bool              `json:"ssl_forced"`
 	CachingEnabled             bool              `json:"caching_enabled"`
@@ -6262,6 +6430,19 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		forwardAuth = ForwardAuthConfig{}
 	}
 	lastError, lastErrorAt := proxyHostVisibleCertError(s)
+	var locations []npmProxyLocation
+	if len(s.Locations) > 0 {
+		locations = make([]npmProxyLocation, 0, len(s.Locations))
+		for _, loc := range s.Locations {
+			locations = append(locations, npmProxyLocation{
+				Path:          loc.Path,
+				ForwardScheme: loc.ForwardScheme,
+				ForwardHost:   loc.ForwardHost,
+				ForwardPort:   loc.ForwardPort,
+				ForwardPath:   loc.ForwardPath,
+			})
+		}
+	}
 	return npmProxyHost{
 		ID:                         stableID(s.Name),
 		CreatedOn:                  defaultString(s.CreatedOn, seedTimestamp()),
@@ -6274,6 +6455,7 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		ForwardScheme:              scheme,
 		ForwardHost:                host,
 		ForwardPort:                port,
+		Locations:                  locations,
 		AccessListID:               s.AccessListID,
 		CertificateID:              certID,
 		SSLForced:                  !s.NoTLS,
@@ -6344,6 +6526,37 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 	if err != nil {
 		return Site{}, err
 	}
+	var locations []ProxyLocation
+	if len(p.Locations) > 0 {
+		locations = make([]ProxyLocation, 0, len(p.Locations))
+		for _, loc := range p.Locations {
+			scheme := defaultString(loc.ForwardScheme, "http")
+			hostRaw := strings.TrimSpace(loc.ForwardHost)
+			port := loc.ForwardPort
+			if port <= 0 {
+				port = 80
+			}
+			// 分离 host 和 path（兼容用户在 host 字段中输入了 path 的情况）
+			host, hostPath := splitHostAndPath(hostRaw)
+			// ForwardPath 优先；其次用 host 字段中提取的 path
+			upstreamPath := strings.TrimSpace(loc.ForwardPath)
+			if upstreamPath == "" && hostPath != "" {
+				upstreamPath = hostPath
+			}
+			locBackend := fmt.Sprintf("%s://%s:%d", scheme, host, port)
+			if upstreamPath != "" {
+				locBackend += upstreamPath
+			}
+			locations = append(locations, ProxyLocation{
+				Path:          strings.TrimSpace(loc.Path),
+				ForwardScheme: scheme,
+				ForwardHost:   host,
+				ForwardPort:   port,
+				ForwardPath:   upstreamPath,
+				Backend:       locBackend,
+			})
+		}
+	}
 	site := Site{
 		CreatedOn:                  strings.TrimSpace(p.CreatedOn),
 		ModifiedOn:                 strings.TrimSpace(p.ModifiedOn),
@@ -6351,6 +6564,7 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		ServiceName:                strings.TrimSpace(p.ServiceName),
 		Domain:                     joinListenDomainsWithPorts(p.DomainNames, p.ListenPort, p.ListenPorts),
 		Backend:                    backend,
+		Locations:                  locations,
 		AccessListID:               p.AccessListID,
 		Wildcard:                   wildcard,
 		NoTLS:                      !p.SSLForced,
@@ -9745,6 +9959,10 @@ func splitBackend(backend string) (string, string, int) {
 		parts := strings.SplitN(rest, "://", 2)
 		scheme = parts[0]
 		rest = parts[1]
+	}
+	// 先剥离路径部分，只保留 host[:port]
+	if slash := strings.Index(rest, "/"); slash != -1 {
+		rest = rest[:slash]
 	}
 	host, portText, err := net.SplitHostPort(rest)
 	if err == nil {

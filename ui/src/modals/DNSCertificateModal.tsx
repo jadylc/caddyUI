@@ -6,8 +6,10 @@ import { Alert } from "react-bootstrap";
 import Modal from "react-bootstrap/Modal";
 import { type Certificate, createCertificate } from "src/api/backend";
 import { Button, CertificateAuthorityFields, DNSProviderFields, DomainNamesField } from "src/components";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { T } from "src/locale";
 import { showSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 type DNSCertificateModalProps = InnerModalProps & {
 	initialData?: any;
@@ -20,6 +22,7 @@ const showDNSCertificateModal = (initialData?: any, onCreated?: (certificate: Ce
 
 const DNSCertificateModal = EasyModal.create(
 	({ visible, remove, initialData, onCreated }: DNSCertificateModalProps) => {
+		const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 		const queryClient = useQueryClient();
 		const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
 		const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,7 +56,7 @@ const DNSCertificateModal = EasyModal.create(
 		};
 
 		return (
-			<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+			<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 				<Formik
 					initialValues={
 						{
@@ -73,6 +76,7 @@ const DNSCertificateModal = EasyModal.create(
 				>
 					{() => (
 						<Form>
+							<DirtySync dirtyRef={dirtyRef} />
 							<Modal.Header closeButton>
 								<Modal.Title>
 									{isEdit ? (
@@ -126,7 +130,7 @@ const DNSCertificateModal = EasyModal.create(
 								</div>
 							</Modal.Body>
 							<Modal.Footer>
-								<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+								<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 									<T id="cancel" />
 								</Button>
 								<Button
@@ -143,7 +147,8 @@ const DNSCertificateModal = EasyModal.create(
 					)}
 				</Formik>
 			</Modal>
-		);
+			<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+		</>);
 	},
 );
 

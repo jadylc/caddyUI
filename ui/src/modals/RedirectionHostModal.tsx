@@ -14,7 +14,9 @@ import {
 import { useRedirectionHost, useSetRedirectionHost } from "src/hooks";
 import { T } from "src/locale";
 import { validateString } from "src/modules/Validations";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const showRedirectionHostModal = (id: number | "new") => {
 	EasyModal.show(RedirectionHostModal, { id });
@@ -24,6 +26,7 @@ interface Props extends InnerModalProps {
 	id: number | "new";
 }
 const RedirectionHostModal = EasyModal.create(({ id, visible, remove }: Props) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const { data, isLoading, error } = useRedirectionHost(id);
 	const { mutate: setRedirectionHost } = useSetRedirectionHost();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
@@ -59,7 +62,7 @@ const RedirectionHostModal = EasyModal.create(({ id, visible, remove }: Props) =
 	};
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}
@@ -89,6 +92,7 @@ const RedirectionHostModal = EasyModal.create(({ id, visible, remove }: Props) =
 				>
 					{() => (
 						<Form>
+							<DirtySync dirtyRef={dirtyRef} />
 							<Modal.Header closeButton>
 								<Modal.Title>
 									<T
@@ -284,7 +288,7 @@ const RedirectionHostModal = EasyModal.create(({ id, visible, remove }: Props) =
 								</div>
 							</Modal.Body>
 							<Modal.Footer>
-								<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+								<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 									<T id="cancel" />
 								</Button>
 								<Button
@@ -303,7 +307,8 @@ const RedirectionHostModal = EasyModal.create(({ id, visible, remove }: Props) =
 				</Formik>
 			)}
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showRedirectionHostModal };

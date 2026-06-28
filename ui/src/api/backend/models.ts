@@ -102,6 +102,7 @@ export interface ProxyLocation {
 	forwardScheme: string;
 	forwardHost: string;
 	forwardPort: number;
+	forwardPath?: string;
 }
 
 export interface ForwardAuthConfig {

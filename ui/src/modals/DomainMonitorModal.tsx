@@ -9,9 +9,11 @@ import { createCredential } from "src/api/backend";
 import type { CredentialSummary } from "src/api/backend/models";
 import { Button, Loading } from "src/components";
 import { useCredentials, useDomainMonitor, useSetDomainMonitor } from "src/hooks";
-import { T } from "src/locale";
-import { validateString } from "src/modules/Validations";
+import { intl, T } from "src/locale";
+import { validateDuration, validateNumber, validateString } from "src/modules/Validations";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const NEW_DIGITALPLAT_CREDENTIAL = "__new_digitalplat__";
 const NEW_DNSHE_CREDENTIAL = "__new_dnshe__";
@@ -65,6 +67,7 @@ const registrarProviderValue = (value: string) => {
 };
 
 const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useDomainMonitor(id);
 	const { data: credentials, isLoading: credentialsLoading } = useCredentials();
@@ -180,7 +183,7 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 	};
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}
@@ -262,6 +265,7 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 
 						return (
 							<Form>
+								<DirtySync dirtyRef={dirtyRef} />
 								<Modal.Header closeButton>
 									<Modal.Title>
 										<T
@@ -295,64 +299,76 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 											</div>
 										)}
 									</Field>
-									<Field name="domainNames">
-										{({ field }: any) => (
+									<Field name="domainNames" validate={(v: string) => !v?.trim() ? intl.formatMessage({ id: "error.required" }) : undefined}>
+										{({ field, form }: any) => (
 											<div className="mb-3">
 												<label className="form-label" htmlFor="domainMonitorDomains">
 													<T id="domain-monitor.domains" />
 												</label>
 												<textarea
 													id="domainMonitorDomains"
-													className="form-control"
+													className={`form-control ${form.errors.domainNames && form.touched.domainNames ? "is-invalid" : ""}`}
 													rows={4}
 													required
 													{...field}
 												/>
-												<small className="text-muted">
-													<T id="domain-monitor.domains.help" />
-												</small>
+												{form.errors.domainNames && form.touched.domainNames ? (
+													<div className="invalid-feedback">{form.errors.domainNames}</div>
+												) : (
+													<small className="text-muted">
+														<T id="domain-monitor.domains.help" />
+													</small>
+												)}
 											</div>
 										)}
 									</Field>
 									<div className="row">
 										<div className="col-md-6">
-											<Field name="checkInterval">
-												{({ field }: any) => (
+											<Field name="checkInterval" validate={validateDuration()}>
+												{({ field, form }: any) => (
 													<div className="mb-3">
 														<label className="form-label" htmlFor="domainMonitorInterval">
 															<T id="domain-monitor.check-interval" />
 														</label>
 														<input
 															id="domainMonitorInterval"
-															className="form-control"
+															className={`form-control ${form.errors.checkInterval && form.touched.checkInterval ? "is-invalid" : ""}`}
 															required
 															{...field}
 														/>
-														<small className="text-muted">
-															<T id="domain-monitor.check-interval.help" />
-														</small>
+														{form.errors.checkInterval && form.touched.checkInterval ? (
+															<div className="invalid-feedback">{form.errors.checkInterval}</div>
+														) : (
+															<small className="text-muted">
+																<T id="domain-monitor.check-interval.help" />
+															</small>
+														)}
 													</div>
 												)}
 											</Field>
 										</div>
 										<div className="col-md-6">
-											<Field name="thresholdDays">
-												{({ field }: any) => (
+											<Field name="thresholdDays" validate={validateNumber(0, 365)}>
+												{({ field, form }: any) => (
 													<div className="mb-3">
 														<label className="form-label" htmlFor="domainMonitorThreshold">
 															<T id="domain-monitor.threshold-days" />
 														</label>
 														<input
 															id="domainMonitorThreshold"
-															className="form-control"
+															className={`form-control ${form.errors.thresholdDays && form.touched.thresholdDays ? "is-invalid" : ""}`}
 															type="number"
 															min={0}
 															required
 															{...field}
 														/>
-														<small className="text-muted">
-															<T id="domain-monitor.threshold-days.help" />
-														</small>
+														{form.errors.thresholdDays && form.touched.thresholdDays ? (
+															<div className="invalid-feedback">{form.errors.thresholdDays}</div>
+														) : (
+															<small className="text-muted">
+																<T id="domain-monitor.threshold-days.help" />
+															</small>
+														)}
 													</div>
 												)}
 											</Field>
@@ -675,7 +691,7 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 									) : null}
 								</Modal.Body>
 								<Modal.Footer>
-									<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+									<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 										<T id="cancel" />
 									</Button>
 									<Button
@@ -694,7 +710,8 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 				</Formik>
 			)}
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showDomainMonitorModal };

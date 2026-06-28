@@ -7,7 +7,9 @@ import { Button, Loading } from "src/components";
 import { useSetWakeDevice, useWakeDevice } from "src/hooks";
 import { intl, T } from "src/locale";
 import { validateString } from "src/modules/Validations";
+import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
+import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
 const showWakeDeviceModal = (id: number | "new") => {
 	EasyModal.show(WakeDeviceModal, { id });
@@ -48,6 +50,7 @@ const validateOptionalPort = (value?: string | number): string | undefined => {
 };
 
 const WakeDeviceModal = EasyModal.create(({ id, visible, remove }: Props) => {
+	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const { data, isLoading, error } = useWakeDevice(id);
 	const { mutate: setWakeDevice } = useSetWakeDevice();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
@@ -85,7 +88,7 @@ const WakeDeviceModal = EasyModal.create(({ id, visible, remove }: Props) => {
 	};
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false} size="lg">
+		<><Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
 			{!isLoading && error && (
 				<Alert variant="danger" className="m-3">
 					{error?.message || "Unknown error"}
@@ -110,6 +113,7 @@ const WakeDeviceModal = EasyModal.create(({ id, visible, remove }: Props) => {
 					onSubmit={onSubmit}
 				>
 					<Form>
+						<DirtySync dirtyRef={dirtyRef} />
 						<Modal.Header closeButton>
 							<Modal.Title>
 								<T
@@ -296,7 +300,7 @@ const WakeDeviceModal = EasyModal.create(({ id, visible, remove }: Props) => {
 							</label>
 						</Modal.Body>
 						<Modal.Footer>
-							<Button data-bs-dismiss="modal" onClick={remove} disabled={isSubmitting}>
+							<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
 								<T id="cancel" />
 							</Button>
 							<Button
@@ -313,7 +317,8 @@ const WakeDeviceModal = EasyModal.create(({ id, visible, remove }: Props) => {
 				</Formik>
 			)}
 		</Modal>
-	);
+		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+	</>);
 });
 
 export { showWakeDeviceModal };

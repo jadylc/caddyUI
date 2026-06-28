@@ -266,6 +266,15 @@
   "cancel": {
     "defaultMessage": "取消"
   },
+  "confirm.discard.title": {
+    "defaultMessage": "未保存的更改"
+  },
+  "confirm.discard.message": {
+    "defaultMessage": "当前有未保存的更改，确定要放弃吗？"
+  },
+  "confirm.discard.confirm": {
+    "defaultMessage": "放弃更改"
+  },
   "certificate": {
     "defaultMessage": "证书"
   },
@@ -623,6 +632,21 @@
   "error.required": {
     "defaultMessage": "此项为必填项"
   },
+  "error.invalid-duration": {
+    "defaultMessage": "无效的时间间隔，例如: 5m、24h、7d"
+  },
+  "dynamic-dns.error.provider-required": {
+    "defaultMessage": "请选择 DNS 服务商"
+  },
+  "access-list.error.username-required": {
+    "defaultMessage": "用户名为必填项"
+  },
+  "access-list.error.password-required": {
+    "defaultMessage": "密码为必填项"
+  },
+  "access-list.error.address-required": {
+    "defaultMessage": "地址为必填项"
+  },
   "expires.on": {
     "defaultMessage": "过期时间: {date}"
   },
@@ -655,6 +679,9 @@
   },
   "host.forward-scheme": {
     "defaultMessage": "协议"
+  },
+  "host.forward-path": {
+    "defaultMessage": "目标路径"
   },
   "host.listen-port": {
     "defaultMessage": "监听端口"
@@ -1078,5 +1105,20 @@
   },
   "settings.acme-email.help": {
     "defaultMessage": "用于 ACME 证书申请时的联系邮箱，可接收来自证书颁发机构的过期提醒等通知。留空将自动生成随机邮箱。"
+  },
+  "location.error.forward-host-required": {
+    "defaultMessage": "请输入转发主机"
+  },
+  "location.error.forward-port-invalid": {
+    "defaultMessage": "端口范围 1-65535"
+  },
+  "location.error.path-no-slash": {
+    "defaultMessage": "路径不能为 /，请留空作为默认规则"
+  },
+  "location.error.forward-path-needs-path": {
+    "defaultMessage": "请先填写路径，或留空目标路径"
+  },
+  "location.error.forward-path-no-slash": {
+    "defaultMessage": "目标路径不能为 /"
   }
 }

@@ -5,7 +5,10 @@ services:
       pull: true
     image: lc121a/caddy-ui:latest
     container_name: caddy-ui
-    network_mode: host
+    ports:
+      - "8888:8888"     # 管理面板和 API
+      - "80:80"         # HTTP 业务流量和 ACME HTTP-01
+      - "443:443"       # HTTPS 业务流量
     environment:
       - TZ=Asia/Shanghai
     volumes:
@@ -15,4 +18,6 @@ services:
 
 volumes:
   caddy_data:
+    name: caddy-ui-data
   caddy_config:
+    name: caddy-ui-config

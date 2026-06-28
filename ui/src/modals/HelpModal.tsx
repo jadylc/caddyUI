@@ -31,7 +31,7 @@ const HelpModal = EasyModal.create(({ section, color, visible, remove }: Props) 
 	}, [section]);
 
 	return (
-		<Modal show={visible} onHide={remove} backdrop="static" keyboard={false}>
+		<Modal show={visible} onHide={remove} backdrop="static" keyboard>
 			<Modal.Body>
 				<ReactMarkdown>{markdownText}</ReactMarkdown>
 			</Modal.Body>
