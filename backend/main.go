@@ -52,6 +52,7 @@ var (
 	settingsPath              = "/config/settings.json"
 	layer4ConfPath            = "/etc/caddy/global.d/layer4.conf"
 	dynamicDNSConfPath        = "/etc/caddy/global.d/dynamic-dns.conf"
+	trustedProxiesConfPath   = "/etc/caddy/global.d/trusted-proxies.conf"
 	customCertMeta            = "/config/custom-certs.json"
 	customCertsDir            = "/config/custom-certs"
 	auditLogPath              = "/config/audit-log.json"
@@ -147,6 +148,9 @@ type Site struct {
 	CustomCertFile             string               `json:"custom_cert_file,omitempty"`
 	CustomKeyFile              string               `json:"custom_key_file,omitempty"`
 	ForwardAuth                ForwardAuthConfig    `json:"forward_auth,omitempty"`
+	HSTSEnabled                 bool                 `json:"hsts_enabled,omitempty"`
+	HSTSSubdomains              bool                 `json:"hsts_subdomains,omitempty"`
+	TrustForwardedProto         bool                 `json:"trust_forwarded_proto,omitempty"`
 	UpstreamInsecureSkipVerify bool                 `json:"upstream_insecure_skip_verify,omitempty"`
 	Disabled                   bool                 `json:"disabled,omitempty"`
 	LastError                  string               `json:"last_error,omitempty"`
@@ -418,6 +422,9 @@ func startupMigrate() error {
 	}
 	if err := syncDynamicDNSConfig(); err != nil {
 		return fmt.Errorf("sync dynamic dns: %w", err)
+	}
+	if err := syncTrustedProxiesConf(); err != nil {
+		return fmt.Errorf("sync trusted proxies: %w", err)
 	}
 	if err := cleanupManagedCertConflicts(); err != nil {
 		return fmt.Errorf("cleanup managed cert conflicts: %w", err)
@@ -1300,6 +1307,11 @@ func putSite(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := syncTrustedProxiesConf(); err != nil {
+		rollbackSite()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	backups, err := syncWildcardPlaceholders(creds)
 	if err != nil {
@@ -1326,6 +1338,12 @@ func deleteSite(w http.ResponseWriter, name string) {
 	os.Remove(metaPath)
 
 	creds, _ := loadCredentials()
+	if err := syncTrustedProxiesConf(); err != nil {
+		rollback(confPath, oldConf)
+		rollback(metaPath, oldMeta)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	backups, err := syncWildcardPlaceholders(creds)
 	if err != nil {
 		restoreBackups(backups)
@@ -2065,6 +2083,14 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 		return "", err
 	}
 	closeHostScope()
+
+	if s.HSTSEnabled && !s.NoTLS {
+		hstsValue := "max-age=31536000"
+		if s.HSTSSubdomains {
+			hstsValue += "; includeSubDomains"
+		}
+		fmt.Fprintf(&b, "%sheader Strict-Transport-Security %q\n", blockInner, hstsValue)
+	}
 
 	// DNS-01 或 wildcard 单域名签发，emit tls block
 	if err := writeOptionalTLSBlock(&b, s, creds); err != nil {
@@ -6466,9 +6492,9 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		AllowWebsocketUpgrade:      true,
 		HTTP2Support:               true,
 		Enabled:                    !s.Disabled,
-		HSTSEnabled:                false,
-		HSTSSubdomains:             false,
-		TrustForwardedProto:        false,
+		HSTSEnabled:                s.HSTSEnabled,
+		HSTSSubdomains:             s.HSTSSubdomains,
+		TrustForwardedProto:        s.TrustForwardedProto,
 		ForwardAuth:                forwardAuth,
 		UpstreamInsecureSkipVerify: s.UpstreamInsecureSkipVerify,
 		Owner:                      localNPMUser,
@@ -6577,6 +6603,9 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		CustomKeyFile:              customKeyFile,
 		ForwardAuth:                forwardAuth,
 		UpstreamInsecureSkipVerify: p.UpstreamInsecureSkipVerify,
+		HSTSEnabled:                p.HSTSEnabled,
+		HSTSSubdomains:             p.HSTSSubdomains,
+		TrustForwardedProto:        p.TrustForwardedProto,
 		Disabled:                   !p.Enabled,
 	}
 	if !npmNewCertificateRequested(p.CertificateID) && asInt(p.CertificateID) > 0 {
@@ -6713,8 +6742,8 @@ func siteToNPMRedirectionHost(s Site, certByDomain map[string]npmCertificate) np
 		ForwardScheme:     scheme,
 		ForwardHTTPCode:   defaultInt(s.RedirectCode, http.StatusMovedPermanently),
 		Enabled:           !s.Disabled,
-		HSTSEnabled:       false,
-		HSTSSubdomains:    false,
+		HSTSEnabled:       s.HSTSEnabled,
+		HSTSSubdomains:    s.HSTSSubdomains,
 		Owner:             localNPMUser,
 		Certificate:       cert,
 	}
@@ -6747,6 +6776,8 @@ func npmRedirectionHostToSite(item npmRedirectionHost, existingName string) (Sit
 		CertificateMode:     certificateMode,
 		CertificateBindings: bindings,
 		Issuer:              issuer,
+		HSTSEnabled:         item.HSTSEnabled,
+		HSTSSubdomains:      item.HSTSSubdomains,
 		Disabled:            !item.Enabled,
 	}
 	if site.Wildcard {
@@ -6773,8 +6804,8 @@ func siteToNPMDeadHost(s Site, certByDomain map[string]npmCertificate) npmDeadHo
 		Meta:           mergeMeta(map[string]any{"caddy_name": s.Name, "challenge_pref": s.ChallengePref, "wildcard": s.Wildcard, "credential_id": s.CredentialID, "certificate_mode": s.CertificateMode, "certificate_bindings": bindings}, issuerMeta(s.Issuer)),
 		HTTP2Support:   true,
 		Enabled:        !s.Disabled,
-		HSTSEnabled:    false,
-		HSTSSubdomains: false,
+		HSTSEnabled:    s.HSTSEnabled,
+		HSTSSubdomains: s.HSTSSubdomains,
 		Owner:          localNPMUser,
 		Certificate:    cert,
 	}
@@ -6800,6 +6831,8 @@ func npmDeadHostToSite(item npmDeadHost, existingName string) (Site, error) {
 		CertificateMode:     certificateMode,
 		CertificateBindings: bindings,
 		Issuer:              issuer,
+		HSTSEnabled:         item.HSTSEnabled,
+		HSTSSubdomains:      item.HSTSSubdomains,
 		Disabled:            !item.Enabled,
 	}
 	if site.Wildcard {
@@ -7527,6 +7560,9 @@ func renderSitesAndReload() error {
 	if err := renderAllSiteConfs(creds); err != nil {
 		return err
 	}
+	if err := syncTrustedProxiesConf(); err != nil {
+		return err
+	}
 	backups, err := syncWildcardPlaceholders(creds)
 	if err != nil {
 		restoreBackups(backups)
@@ -7631,6 +7667,30 @@ func syncStreamsConfig() error {
 		return err
 	}
 	return os.WriteFile(layer4ConfPath, []byte(conf), 0644)
+}
+
+func syncTrustedProxiesConf() error {
+	sites, err := readAllSites()
+	if err != nil {
+		return err
+	}
+	need := false
+	for _, s := range sites {
+		if s.TrustForwardedProto && !s.NoTLS && !s.Disabled {
+			need = true
+			break
+		}
+	}
+	if !need {
+		if err := os.Remove(trustedProxiesConfPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(trustedProxiesConfPath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(trustedProxiesConfPath, []byte("servers {\n\ttrusted_proxies static 0.0.0.0/0 ::/0\n}\n"), 0644)
 }
 
 func renderLayer4Config(streams []npmStream) (string, error) {
