@@ -241,9 +241,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 							forwardHost: initialData?.forwardHost ?? data?.forwardHost ?? "",
 							forwardPort: initialData?.forwardPort ?? data?.forwardPort ?? undefined,
 							accessListId: initialData?.accessListId ?? data?.accessListId ?? 0,
-							allowWebsocketUpgrade:
-								initialData?.allowWebsocketUpgrade ?? data?.allowWebsocketUpgrade ?? false,
-							upstreamInsecureSkipVerify:
+														upstreamInsecureSkipVerify:
 								initialData?.upstreamInsecureSkipVerify ??
 								data?.upstreamInsecureSkipVerify ??
 								false,
@@ -473,30 +471,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 														<T id="options" />
 													</h4>
 													<div className="divide-y">
-														<div>
-															<label className="row" htmlFor="allowWebsocketUpgrade">
-																<span className="col">
-																	<T id="host.flags.websockets-upgrade" />
-																</span>
-																<span className="col-auto">
-																	<Field name="allowWebsocketUpgrade" type="checkbox">
-																		{({ field }: any) => (
-																			<label className="form-check form-check-single form-switch">
-																				<input
-																					{...field}
-																					id="allowWebsocketUpgrade"
-																					className={cn("form-check-input", {
-																						"bg-lime": field.checked,
-																					})}
-																					type="checkbox"
-																				/>
-																			</label>
-																		)}
-																	</Field>
-																</span>
-															</label>
-														</div>
-														<div>
+															<div>
 															<label className="row" htmlFor="upstreamInsecureSkipVerify">
 																<span className="col">
 																	<T id="host.flags.upstream-insecure-skip-verify" />

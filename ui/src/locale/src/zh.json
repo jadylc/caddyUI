@@ -665,9 +665,6 @@
   "host.flags.protocols": {
     "defaultMessage": "协议"
   },
-  "host.flags.websockets-upgrade": {
-    "defaultMessage": "WebSocket 透传"
-  },
   "host.flags.upstream-insecure-skip-verify": {
     "defaultMessage": "跳过上游 HTTPS 证书校验"
   },
