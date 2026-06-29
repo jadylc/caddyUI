@@ -4367,9 +4367,6 @@ type npmProxyHost struct {
 	AccessListID               int                `json:"access_list_id"`
 	CertificateID              any               `json:"certificate_id"`
 	SSLForced                  bool              `json:"ssl_forced"`
-	CachingEnabled             bool              `json:"caching_enabled"`
-	BlockExploits              bool              `json:"block_exploits"`
-	AdvancedConfig             string            `json:"advanced_config"`
 	Meta                       map[string]any    `json:"meta"`
 	AllowWebsocketUpgrade      bool              `json:"allow_websocket_upgrade"`
 	HTTP2Support               bool              `json:"http2_support"`
@@ -4411,8 +4408,6 @@ type npmRedirectionHost struct {
 	PreservePath      bool            `json:"preserve_path"`
 	CertificateID     any             `json:"certificate_id"`
 	SSLForced         bool            `json:"ssl_forced"`
-	BlockExploits     bool            `json:"block_exploits"`
-	AdvancedConfig    string          `json:"advanced_config"`
 	Meta              map[string]any  `json:"meta"`
 	HTTP2Support      bool            `json:"http2_support"`
 	ForwardScheme     string          `json:"forward_scheme"`
@@ -4432,7 +4427,6 @@ type npmDeadHost struct {
 	DomainNames    []string        `json:"domain_names"`
 	CertificateID  any             `json:"certificate_id"`
 	SSLForced      bool            `json:"ssl_forced"`
-	AdvancedConfig string          `json:"advanced_config"`
 	Meta           map[string]any  `json:"meta"`
 	HTTP2Support   bool            `json:"http2_support"`
 	Enabled        bool            `json:"enabled"`
@@ -6485,9 +6479,6 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		AccessListID:               s.AccessListID,
 		CertificateID:              certID,
 		SSLForced:                  !s.NoTLS,
-		CachingEnabled:             false,
-		BlockExploits:              false,
-		AdvancedConfig:             "",
 		Meta:                       mergeMeta(map[string]any{"caddy_name": s.Name, "challenge_pref": s.ChallengePref, "wildcard": s.Wildcard, "credential_id": s.CredentialID, "certificate_mode": s.CertificateMode, "certificate_bindings": bindings, "last_error": lastError, "last_error_at": lastErrorAt}, issuerMeta(s.Issuer)),
 		AllowWebsocketUpgrade:      true,
 		HTTP2Support:               true,
@@ -6735,8 +6726,6 @@ func siteToNPMRedirectionHost(s Site, certByDomain map[string]npmCertificate) np
 		PreservePath:      s.PreservePath,
 		CertificateID:     certID,
 		SSLForced:         !s.NoTLS,
-		BlockExploits:     false,
-		AdvancedConfig:    "",
 		Meta:              mergeMeta(map[string]any{"caddy_name": s.Name, "challenge_pref": s.ChallengePref, "wildcard": s.Wildcard, "credential_id": s.CredentialID, "certificate_mode": s.CertificateMode, "certificate_bindings": bindings}, issuerMeta(s.Issuer)),
 		HTTP2Support:      true,
 		ForwardScheme:     scheme,
@@ -6800,7 +6789,6 @@ func siteToNPMDeadHost(s Site, certByDomain map[string]npmCertificate) npmDeadHo
 		DomainNames:    domains,
 		CertificateID:  certID,
 		SSLForced:      !s.NoTLS,
-		AdvancedConfig: "",
 		Meta:           mergeMeta(map[string]any{"caddy_name": s.Name, "challenge_pref": s.ChallengePref, "wildcard": s.Wildcard, "credential_id": s.CredentialID, "certificate_mode": s.CertificateMode, "certificate_bindings": bindings}, issuerMeta(s.Issuer)),
 		HTTP2Support:   true,
 		Enabled:        !s.Disabled,
