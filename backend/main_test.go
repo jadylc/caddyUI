@@ -1671,6 +1671,122 @@ func TestRenderSiteSupportsUpstreamInsecureSkipVerify(t *testing.T) {
 	}
 }
 
+func TestRenderSiteSupportsMultipleUpstreamsAndLoadBalancingPolicy(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:                "multi-upstream",
+		Domain:              "app.example.com",
+		Backend:             "http://127.0.0.1:8080",
+		LoadBalancingPolicy: "round_robin",
+		Upstreams: []ProxyUpstream{
+			{ForwardScheme: "http", ForwardHost: "127.0.0.1", ForwardPort: 8080},
+			{ForwardScheme: "http", ForwardHost: "127.0.0.1", ForwardPort: 8081},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"reverse_proxy http://127.0.0.1:8080 http://127.0.0.1:8081 {",
+		"lb_policy round_robin",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+}
+
+func TestRenderSiteSupportsWeightedRoundRobin(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:                "weighted-upstream",
+		Domain:              "app.example.com",
+		Backend:             "http://127.0.0.1:8080",
+		LoadBalancingPolicy: "weighted_round_robin",
+		Upstreams: []ProxyUpstream{
+			{ForwardScheme: "http", ForwardHost: "127.0.0.1", ForwardPort: 8080, Weight: 3},
+			{ForwardScheme: "http", ForwardHost: "127.0.0.1", ForwardPort: 8081, Weight: 1},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	if !strings.Contains(conf, "lb_policy weighted_round_robin 3 1") {
+		t.Fatalf("renderSite = %q, want weighted round robin policy", conf)
+	}
+}
+
+func TestRenderSiteSupportsLocationMultipleUpstreams(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:    "location-upstreams",
+		Domain:  "app.example.com",
+		Backend: "http://127.0.0.1:8080",
+		Locations: []ProxyLocation{
+			{
+				Path:                "/api",
+				Backend:             "http://127.0.0.1:9000",
+				LoadBalancingPolicy: "least_conn",
+				Upstreams: []ProxyUpstream{
+					{ForwardScheme: "http", ForwardHost: "127.0.0.1", ForwardPort: 9000},
+					{ForwardScheme: "http", ForwardHost: "127.0.0.1", ForwardPort: 9001},
+				},
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"handle_path /api {",
+		"reverse_proxy http://127.0.0.1:9000 http://127.0.0.1:9001 {",
+		"lb_policy least_conn",
+		"header_up Host {upstream_hostport}",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+}
+
+func TestNPMProxyHostRoundTripsMultipleUpstreams(t *testing.T) {
+	host := npmProxyHost{
+		DomainNames:         []string{"app.example.com"},
+		ForwardScheme:       "http",
+		ForwardHost:         "127.0.0.1",
+		ForwardPort:         8080,
+		LoadBalancingPolicy: "least_conn",
+		Upstreams: []npmProxyUpstream{
+			{ForwardScheme: "http", ForwardHost: "10.0.0.1", ForwardPort: 8080, Weight: 2},
+			{ForwardScheme: "http", ForwardHost: "10.0.0.2", ForwardPort: 8080, Weight: 1},
+		},
+		Enabled: true,
+		Meta:    map[string]any{},
+	}
+
+	site, err := npmProxyHostToSite(host, "app")
+	if err != nil {
+		t.Fatalf("npmProxyHostToSite error = %v", err)
+	}
+	if site.Backend != "http://10.0.0.1:8080" || len(site.Upstreams) != 2 || site.LoadBalancingPolicy != "least_conn" {
+		t.Fatalf("site upstreams = %q/%#v/%q", site.Backend, site.Upstreams, site.LoadBalancingPolicy)
+	}
+	out := siteToNPMProxyHost(site, nil)
+	if out.ForwardHost != "10.0.0.1" || len(out.Upstreams) != 2 || out.Upstreams[0].Weight != 2 || out.LoadBalancingPolicy != "least_conn" {
+		t.Fatalf("round-trip proxy host = %#v", out)
+	}
+}
+
+func TestValidateSiteProxyConfigRejectsMixedSchemes(t *testing.T) {
+	err := validateSiteProxyConfig(Site{
+		Backend: "http://127.0.0.1:8080",
+		Upstreams: []ProxyUpstream{
+			{ForwardScheme: "http", ForwardHost: "127.0.0.1", ForwardPort: 8080},
+			{ForwardScheme: "https", ForwardHost: "127.0.0.1", ForwardPort: 8443},
+		},
+	})
+	if err == nil {
+		t.Fatalf("validateSiteProxyConfig error = nil, want mixed scheme error")
+	}
+}
+
 func TestRenderNoTLSCustomListenPortsUseExplicitHTTP(t *testing.T) {
 	site := Site{
 		Name:    "custom-http-port",

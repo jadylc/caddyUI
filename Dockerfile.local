@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Offline rebuild: reuse existing caddy binary/plugins from lc121a/caddy-ui:latest
 # and overlay freshly built UI + backend API artifacts.
 

@@ -1,5 +1,5 @@
 import { useFormikContext } from "formik";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { Certificate, CertificateBinding } from "src/api/backend";
 import { certificateProvider, certificateProviderText } from "src/components";
 import { useCertificates } from "src/hooks";
@@ -71,6 +71,14 @@ export function DomainCertificateBindingsField() {
 		[values.meta?.certificateBindings],
 	);
 
+	const syncCertificateId = useCallback(
+		(bindings: CertificateBinding[]) => {
+			const hasSelected = bindings.some((b) => b.mode === "selected");
+			setFieldValue("certificateId", hasSelected ? -1 : 0);
+		},
+		[setFieldValue],
+	);
+
 	useEffect(() => {
 		const next = domainNames.map((domain: string) => {
 			const existing = currentBindings.find((binding) => binding.domain === domain);
@@ -80,12 +88,7 @@ export function DomainCertificateBindingsField() {
 			setFieldValue("meta.certificateBindings", next);
 			syncCertificateId(next);
 		}
-	}, [currentBindings, domainNames, setFieldValue]);
-
-	const syncCertificateId = (bindings: CertificateBinding[]) => {
-		const hasSelected = bindings.some((b) => b.mode === "selected");
-		setFieldValue("certificateId", hasSelected ? -1 : 0);
-	};
+	}, [currentBindings, domainNames, setFieldValue, syncCertificateId]);
 
 	const updateBinding = (domain: string, rawValue: string) => {
 		const certificateId = Number(rawValue || 0);

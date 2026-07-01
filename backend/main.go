@@ -52,7 +52,7 @@ var (
 	settingsPath              = "/config/settings.json"
 	layer4ConfPath            = "/etc/caddy/global.d/layer4.conf"
 	dynamicDNSConfPath        = "/etc/caddy/global.d/dynamic-dns.conf"
-	trustedProxiesConfPath   = "/etc/caddy/global.d/trusted-proxies.conf"
+	trustedProxiesConfPath    = "/etc/caddy/global.d/trusted-proxies.conf"
 	customCertMeta            = "/config/custom-certs.json"
 	customCertsDir            = "/config/custom-certs"
 	auditLogPath              = "/config/audit-log.json"
@@ -114,12 +114,22 @@ type IssuerConfig struct {
 
 // ProxyLocation 反代路径规则，允许同一站点下多个路径指向不同后端。
 type ProxyLocation struct {
-	Path          string `json:"path"`
+	Path                string          `json:"path"`
+	ForwardScheme       string          `json:"forward_scheme,omitempty"`
+	ForwardHost         string          `json:"forward_host"`
+	ForwardPort         int             `json:"forward_port"`
+	ForwardPath         string          `json:"forward_path,omitempty"` // 目标路径重写，如 /B 表示 /A → /B
+	Backend             string          `json:"backend,omitempty"`      // 计算字段: scheme://host:port[/path]
+	Upstreams           []ProxyUpstream `json:"upstreams,omitempty"`
+	LoadBalancingPolicy string          `json:"load_balancing_policy,omitempty"`
+}
+
+type ProxyUpstream struct {
 	ForwardScheme string `json:"forward_scheme,omitempty"`
 	ForwardHost   string `json:"forward_host"`
 	ForwardPort   int    `json:"forward_port"`
-	ForwardPath   string `json:"forward_path,omitempty"` // 目标路径重写，如 /B 表示 /A → /B
-	Backend       string `json:"backend,omitempty"`      // 计算字段: scheme://host:port[/path]
+	Weight        int    `json:"weight,omitempty"`
+	Backend       string `json:"backend,omitempty"`
 }
 
 // Site 反代条目。
@@ -132,7 +142,9 @@ type Site struct {
 	Domain                     string               `json:"domain"`
 	Path                       string               `json:"path,omitempty"`
 	Backend                    string               `json:"backend"`
-	Locations                  []ProxyLocation        `json:"locations,omitempty"`
+	Upstreams                  []ProxyUpstream      `json:"upstreams,omitempty"`
+	LoadBalancingPolicy        string               `json:"load_balancing_policy,omitempty"`
+	Locations                  []ProxyLocation      `json:"locations,omitempty"`
 	RedirectURL                string               `json:"redirect_url,omitempty"`
 	RedirectCode               int                  `json:"redirect_code,omitempty"`
 	PreservePath               bool                 `json:"preserve_path,omitempty"`
@@ -148,9 +160,9 @@ type Site struct {
 	CustomCertFile             string               `json:"custom_cert_file,omitempty"`
 	CustomKeyFile              string               `json:"custom_key_file,omitempty"`
 	ForwardAuth                ForwardAuthConfig    `json:"forward_auth,omitempty"`
-	HSTSEnabled                 bool                 `json:"hsts_enabled,omitempty"`
-	HSTSSubdomains              bool                 `json:"hsts_subdomains,omitempty"`
-	TrustForwardedProto         bool                 `json:"trust_forwarded_proto,omitempty"`
+	HSTSEnabled                bool                 `json:"hsts_enabled,omitempty"`
+	HSTSSubdomains             bool                 `json:"hsts_subdomains,omitempty"`
+	TrustForwardedProto        bool                 `json:"trust_forwarded_proto,omitempty"`
 	UpstreamInsecureSkipVerify bool                 `json:"upstream_insecure_skip_verify,omitempty"`
 	Disabled                   bool                 `json:"disabled,omitempty"`
 	LastError                  string               `json:"last_error,omitempty"`
@@ -1196,6 +1208,13 @@ func putSite(w http.ResponseWriter, r *http.Request, name string) {
 	if s.Kind == "" {
 		s.Kind = "proxy"
 	}
+	if s.Kind == "proxy" {
+		if err := validateSiteProxyConfig(s); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		normalizeSiteProxyConfig(&s)
+	}
 	if strings.TrimSpace(s.Domain) == "" {
 		http.Error(w, "域名不能为空", http.StatusBadRequest)
 		return
@@ -2231,7 +2250,6 @@ func writeLocationReverseProxy(b *strings.Builder, s Site, loc ProxyLocation, in
 	if backend == "" {
 		backend = s.Backend
 	}
-	cleanBackend, _ := sanitizeBackendURL(backend)
 
 	accessList, hasAccessList := accessListByID(s.AccessListID)
 	if hasAccessList {
@@ -2240,24 +2258,7 @@ func writeLocationReverseProxy(b *strings.Builder, s Site, loc ProxyLocation, in
 		}
 	}
 
-	needsInsecureSkipVerify := s.UpstreamInsecureSkipVerify && strings.HasPrefix(strings.ToLower(strings.TrimSpace(cleanBackend)), "https://")
-	// Extract host:port for Host header (strip scheme)
-	upstreamHostPort := cleanBackend
-	if idx := strings.Index(upstreamHostPort, "://"); idx != -1 {
-		upstreamHostPort = upstreamHostPort[idx+3:]
-	}
-	if !needsInsecureSkipVerify {
-		fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, cleanBackend)
-		fmt.Fprintf(b, "%s    header_up Host %s\n", indent, upstreamHostPort)
-		fmt.Fprintf(b, "%s}\n", indent)
-	} else {
-		fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, cleanBackend)
-		fmt.Fprintf(b, "%s    transport http {\n", indent)
-		fmt.Fprintf(b, "%s        tls_insecure_skip_verify\n", indent)
-		fmt.Fprintf(b, "%s    }\n", indent)
-		fmt.Fprintf(b, "%s    header_up Host %s\n", indent, upstreamHostPort)
-		fmt.Fprintf(b, "%s}\n", indent)
-	}
+	writeUpstreamsReverseProxyBlock(b, loc.Upstreams, defaultString(loc.LoadBalancingPolicy, s.LoadBalancingPolicy), backend, s.UpstreamInsecureSkipVerify, true, indent)
 	return nil
 }
 
@@ -2543,18 +2544,246 @@ func accessBasicAuthPasswordHash(password string) (string, error) {
 }
 
 func writeReverseProxyBlock(b *strings.Builder, backend string, _ string, upstreamInsecureSkipVerify bool, indent string) {
-	cleanBackend, _ := sanitizeBackendURL(backend)
-	needsInsecureSkipVerify := upstreamInsecureSkipVerify && strings.HasPrefix(strings.ToLower(strings.TrimSpace(cleanBackend)), "https://")
+	writeUpstreamsReverseProxyBlock(b, nil, "", backend, upstreamInsecureSkipVerify, false, indent)
+}
 
-	if !needsInsecureSkipVerify {
-		fmt.Fprintf(b, "%sreverse_proxy %s\n", indent, cleanBackend)
-	} else {
-		fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, cleanBackend)
+func writeSiteReverseProxyBlock(b *strings.Builder, s Site, indent string) {
+	writeUpstreamsReverseProxyBlock(b, s.Upstreams, s.LoadBalancingPolicy, s.Backend, s.UpstreamInsecureSkipVerify, false, indent)
+}
+
+func writeUpstreamsReverseProxyBlock(b *strings.Builder, upstreams []ProxyUpstream, policy string, fallbackBackend string, upstreamInsecureSkipVerify bool, forceHostHeader bool, indent string) {
+	targets := normalizeProxyUpstreams(upstreams, fallbackBackend)
+	if len(targets) == 0 {
+		return
+	}
+	args := proxyUpstreamArgs(targets)
+	needsBlock := reverseProxyNeedsBlock(targets, policy, upstreamInsecureSkipVerify, forceHostHeader)
+	if !needsBlock {
+		fmt.Fprintf(b, "%sreverse_proxy %s\n", indent, strings.Join(args, " "))
+		return
+	}
+	fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, strings.Join(args, " "))
+	if policyLine := proxyLoadBalancingPolicyLine(policy, targets); policyLine != "" {
+		fmt.Fprintf(b, "%s    lb_policy %s\n", indent, policyLine)
+	}
+	if upstreamInsecureSkipVerify && upstreamsNeedInsecureSkipVerify(targets) {
 		fmt.Fprintf(b, "%s    transport http {\n", indent)
 		fmt.Fprintf(b, "%s        tls_insecure_skip_verify\n", indent)
 		fmt.Fprintf(b, "%s    }\n", indent)
-		fmt.Fprintf(b, "%s}\n", indent)
 	}
+	if forceHostHeader {
+		hostHeader := "{upstream_hostport}"
+		if len(targets) == 1 {
+			hostHeader = proxyUpstreamHostPort(targets[0].Backend)
+		}
+		fmt.Fprintf(b, "%s    header_up Host %s\n", indent, hostHeader)
+	}
+	fmt.Fprintf(b, "%s}\n", indent)
+}
+
+func normalizeProxyUpstreams(upstreams []ProxyUpstream, fallbackBackend string) []ProxyUpstream {
+	out := make([]ProxyUpstream, 0, len(upstreams)+1)
+	seen := map[string]bool{}
+	for _, upstream := range upstreams {
+		normalized := normalizeProxyUpstream(upstream)
+		if strings.TrimSpace(normalized.Backend) == "" || seen[normalized.Backend] {
+			continue
+		}
+		seen[normalized.Backend] = true
+		out = append(out, normalized)
+	}
+	if len(out) == 0 {
+		fallback := normalizeProxyUpstream(ProxyUpstream{Backend: fallbackBackend})
+		if strings.TrimSpace(fallback.Backend) != "" {
+			out = append(out, fallback)
+		}
+	}
+	return out
+}
+
+func normalizeProxyUpstream(upstream ProxyUpstream) ProxyUpstream {
+	backend := strings.TrimSpace(upstream.Backend)
+	scheme := defaultString(upstream.ForwardScheme, "http")
+	host := strings.TrimSpace(upstream.ForwardHost)
+	port := upstream.ForwardPort
+	if backend != "" {
+		scheme, host, port = splitBackend(backend)
+	} else if host != "" {
+		host, _ = splitHostAndPath(host)
+	}
+	if port <= 0 {
+		if scheme == "https" {
+			port = 443
+		} else {
+			port = 80
+		}
+	}
+	if host == "" {
+		return ProxyUpstream{}
+	}
+	backend = fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	cleanBackend, _ := sanitizeBackendURL(backend)
+	weight := upstream.Weight
+	if weight < 0 {
+		weight = 0
+	}
+	return ProxyUpstream{
+		ForwardScheme: scheme,
+		ForwardHost:   host,
+		ForwardPort:   port,
+		Weight:        weight,
+		Backend:       cleanBackend,
+	}
+}
+
+func proxyUpstreamArgs(upstreams []ProxyUpstream) []string {
+	out := make([]string, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		if upstream.Backend != "" {
+			out = append(out, upstream.Backend)
+		}
+	}
+	return out
+}
+
+func reverseProxyNeedsBlock(upstreams []ProxyUpstream, policy string, upstreamInsecureSkipVerify bool, forceHostHeader bool) bool {
+	if proxyLoadBalancingPolicyLine(policy, upstreams) != "" {
+		return true
+	}
+	if upstreamInsecureSkipVerify && upstreamsNeedInsecureSkipVerify(upstreams) {
+		return true
+	}
+	if forceHostHeader {
+		return true
+	}
+	return false
+}
+
+func upstreamsNeedInsecureSkipVerify(upstreams []ProxyUpstream) bool {
+	for _, upstream := range upstreams {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(upstream.Backend)), "https://") {
+			return true
+		}
+	}
+	return false
+}
+
+func proxyUpstreamHostPort(backend string) string {
+	cleanBackend, _ := sanitizeBackendURL(backend)
+	if idx := strings.Index(cleanBackend, "://"); idx != -1 {
+		return cleanBackend[idx+3:]
+	}
+	return cleanBackend
+}
+
+func normalizeLoadBalancingPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "random", "round_robin", "weighted_round_robin", "least_conn", "first", "ip_hash", "client_ip_hash", "uri_hash":
+		return strings.ToLower(strings.TrimSpace(policy))
+	default:
+		return ""
+	}
+}
+
+func proxyLoadBalancingPolicyLine(policy string, upstreams []ProxyUpstream) string {
+	normalized := normalizeLoadBalancingPolicy(policy)
+	if normalized == "" {
+		return ""
+	}
+	if normalized != "weighted_round_robin" {
+		return normalized
+	}
+	weights := make([]string, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		weight := upstream.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		weights = append(weights, strconv.Itoa(weight))
+	}
+	if len(weights) == 0 {
+		return ""
+	}
+	return normalized + " " + strings.Join(weights, " ")
+}
+
+func normalizeSiteProxyConfig(s *Site) {
+	if s == nil {
+		return
+	}
+	s.Upstreams = normalizeProxyUpstreams(s.Upstreams, s.Backend)
+	if len(s.Upstreams) > 0 {
+		s.Backend = s.Upstreams[0].Backend
+	}
+	s.LoadBalancingPolicy = normalizeLoadBalancingPolicy(s.LoadBalancingPolicy)
+	for i := range s.Locations {
+		loc := &s.Locations[i]
+		fallback := loc.Backend
+		if fallback == "" {
+			fallback = s.Backend
+		}
+		loc.Upstreams = normalizeProxyUpstreams(loc.Upstreams, fallback)
+		if len(loc.Upstreams) > 0 {
+			loc.ForwardScheme = loc.Upstreams[0].ForwardScheme
+			loc.ForwardHost = loc.Upstreams[0].ForwardHost
+			loc.ForwardPort = loc.Upstreams[0].ForwardPort
+			if loc.Backend == "" {
+				loc.Backend = loc.Upstreams[0].Backend
+			}
+		}
+		loc.LoadBalancingPolicy = normalizeLoadBalancingPolicy(loc.LoadBalancingPolicy)
+	}
+}
+
+func validateSiteProxyConfig(s Site) error {
+	if strings.TrimSpace(s.Backend) == "" && len(s.Upstreams) == 0 {
+		return errors.New("后端地址不能为空")
+	}
+	if err := validateProxyUpstreams(normalizeProxyUpstreams(s.Upstreams, s.Backend), s.LoadBalancingPolicy, "默认上游"); err != nil {
+		return err
+	}
+	for _, loc := range s.Locations {
+		label := "路径规则"
+		if strings.TrimSpace(loc.Path) != "" {
+			label = fmt.Sprintf("路径规则 %s", strings.TrimSpace(loc.Path))
+		}
+		fallback := loc.Backend
+		if fallback == "" {
+			fallback = s.Backend
+		}
+		if err := validateProxyUpstreams(normalizeProxyUpstreams(loc.Upstreams, fallback), loc.LoadBalancingPolicy, label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateProxyUpstreams(upstreams []ProxyUpstream, policy string, label string) error {
+	if normalizeLoadBalancingPolicy(policy) == "" && strings.TrimSpace(policy) != "" {
+		return fmt.Errorf("%s 的负载均衡策略无效", label)
+	}
+	if len(upstreams) == 0 {
+		return fmt.Errorf("%s 不能为空", label)
+	}
+	firstScheme := ""
+	for _, upstream := range upstreams {
+		if strings.TrimSpace(upstream.ForwardHost) == "" || upstream.ForwardPort <= 0 || upstream.ForwardPort > 65535 {
+			return fmt.Errorf("%s 包含无效上游", label)
+		}
+		if upstream.Weight < 0 {
+			return fmt.Errorf("%s 的权重不能小于 0", label)
+		}
+		scheme := strings.ToLower(strings.TrimSpace(upstream.ForwardScheme))
+		if scheme != "http" && scheme != "https" {
+			return fmt.Errorf("%s 的协议必须为 http 或 https", label)
+		}
+		if firstScheme == "" {
+			firstScheme = scheme
+		} else if firstScheme != scheme {
+			return fmt.Errorf("%s 不能混用 http 和 https 上游", label)
+		}
+	}
+	return nil
 }
 
 // sanitizeBackendURL 从可能包含路径的 backend 中提取 scheme://host:port 部分，
@@ -2595,7 +2824,7 @@ func writeProtectedReverseProxyBlock(b *strings.Builder, s Site, indent string, 
 		return err
 	}
 	if !cfg.Enabled {
-		writeReverseProxyBlock(b, s.Backend, s.Headers, s.UpstreamInsecureSkipVerify, indent)
+		writeSiteReverseProxyBlock(b, s, indent)
 		return nil
 	}
 	loginURL := global.LoginURL
@@ -2605,15 +2834,15 @@ func writeProtectedReverseProxyBlock(b *strings.Builder, s Site, indent string, 
 		}
 	}
 	if cfg.Provider == "authentik" && !pathScoped {
-		writeAuthentikProtectedReverseProxyBlock(b, cfg, s.Backend, s.Headers, s.UpstreamInsecureSkipVerify, indent)
+		writeAuthentikProtectedReverseProxyBlock(b, cfg, s, indent)
 		return nil
 	}
 	if cfg.UseGlobal && global.FailOpen {
-		writeForwardAuthFailOpenBlock(b, cfg, s.Backend, s.Headers, s.UpstreamInsecureSkipVerify, loginURL, indent)
+		writeForwardAuthFailOpenBlock(b, cfg, s, loginURL, indent)
 		return nil
 	}
-	writeForwardAuthBlock(b, cfg, s.Backend, loginURL, indent)
-	writeReverseProxyBlock(b, s.Backend, s.Headers, s.UpstreamInsecureSkipVerify, indent)
+	writeForwardAuthBlock(b, cfg, s, loginURL, indent)
+	writeSiteReverseProxyBlock(b, s, indent)
 	return nil
 }
 
@@ -2629,7 +2858,7 @@ func writeForwardAuthPublicRoutes(b *strings.Builder, s Site, indent string) err
 	return nil
 }
 
-func writeForwardAuthBlock(b *strings.Builder, cfg ForwardAuthConfig, backend string, loginURL string, indent string) error {
+func writeForwardAuthBlock(b *strings.Builder, cfg ForwardAuthConfig, s Site, loginURL string, indent string) error {
 	cfg, err := normalizeForwardAuthConfig(cfg)
 	if err != nil {
 		return err
@@ -2666,7 +2895,7 @@ func writeForwardAuthBlock(b *strings.Builder, cfg ForwardAuthConfig, backend st
 			fmt.Fprintf(b, "%sreverse_proxy %s {\n", inner+"    ", cfg.Upstream)
 			fmt.Fprintf(b, "%s@%s_404 status 404\n", inner+"        ", tag)
 			fmt.Fprintf(b, "%shandle_response @%s_404 {\n", inner+"        ", tag)
-			fmt.Fprintf(b, "%sreverse_proxy %s\n", inner+"            ", backend)
+			writeSiteReverseProxyBlock(b, s, inner+"            ")
 			fmt.Fprintf(b, "%s}\n", inner+"        ")
 			fmt.Fprintf(b, "%s}\n", inner+"    ")
 			fmt.Fprintf(b, "%s}\n", inner)
@@ -2727,14 +2956,14 @@ func writeForwardAuthBlock(b *strings.Builder, cfg ForwardAuthConfig, backend st
 	return nil
 }
 
-func writeAuthentikProtectedReverseProxyBlock(b *strings.Builder, cfg ForwardAuthConfig, backend string, headers string, upstreamInsecureSkipVerify bool, indent string) {
+func writeAuthentikProtectedReverseProxyBlock(b *strings.Builder, cfg ForwardAuthConfig, s Site, indent string) {
 	fmt.Fprintf(b, "%sroute {\n", indent)
 	writeAuthentikOutpostRoute(b, cfg, indent+"    ")
 	fmt.Fprintf(b, "%s    forward_auth %s {\n", indent, cfg.Upstream)
 	fmt.Fprintf(b, "%s        uri %s\n", indent, cfg.URI)
 	fmt.Fprintf(b, "%s        copy_headers %s\n", indent, strings.Join(cfg.CopyHeaders, " "))
 	fmt.Fprintf(b, "%s    }\n", indent)
-	writeReverseProxyBlock(b, backend, headers, upstreamInsecureSkipVerify, indent+"    ")
+	writeSiteReverseProxyBlock(b, s, indent+"    ")
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
@@ -2750,7 +2979,7 @@ func writeAuthentikOutpostRoute(b *strings.Builder, cfg ForwardAuthConfig, inden
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
-func writeForwardAuthFailOpenBlock(b *strings.Builder, cfg ForwardAuthConfig, backend string, headers string, upstreamInsecureSkipVerify bool, loginURL string, indent string) {
+func writeForwardAuthFailOpenBlock(b *strings.Builder, cfg ForwardAuthConfig, s Site, loginURL string, indent string) {
 	fmt.Fprintf(b, "%sroute {\n", indent)
 	fmt.Fprintf(b, "%s    vars authelia_phase true\n", indent)
 	fmt.Fprintf(b, "%s    reverse_proxy %s {\n", indent, cfg.Upstream)
@@ -2765,7 +2994,7 @@ func writeForwardAuthFailOpenBlock(b *strings.Builder, cfg ForwardAuthConfig, ba
 		fmt.Fprintf(b, "%s            request_header %s {rp.header.%s}\n", indent, header, header)
 	}
 	fmt.Fprintf(b, "%s            vars authelia_phase false\n", indent)
-	writeReverseProxyBlock(b, backend, headers, upstreamInsecureSkipVerify, indent+"            ")
+	writeSiteReverseProxyBlock(b, s, indent+"            ")
 	fmt.Fprintf(b, "%s        }\n", indent)
 	if loginURL != "" {
 		fmt.Fprintf(b, "%s        @auth_error status 401 403\n", indent)
@@ -2779,7 +3008,7 @@ func writeForwardAuthFailOpenBlock(b *strings.Builder, cfg ForwardAuthConfig, ba
 	fmt.Fprintf(b, "%shandle_errors {\n", indent)
 	fmt.Fprintf(b, "%s    @authelia_unavailable expression `{http.vars.authelia_phase} == true && {err.status_code} >= 500`\n", indent)
 	fmt.Fprintf(b, "%s    handle @authelia_unavailable {\n", indent)
-	writeReverseProxyBlock(b, backend, headers, upstreamInsecureSkipVerify, indent+"        ")
+	writeSiteReverseProxyBlock(b, s, indent+"        ")
 	fmt.Fprintf(b, "%s    }\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)
 }
@@ -4344,41 +4573,52 @@ type auditEntry struct {
 }
 
 type npmProxyLocation struct {
-	Path          string `json:"path"`
+	Path                string             `json:"path"`
+	ForwardScheme       string             `json:"forward_scheme"`
+	ForwardHost         string             `json:"forward_host"`
+	ForwardPort         int                `json:"forward_port"`
+	ForwardPath         string             `json:"forward_path,omitempty"`
+	Upstreams           []npmProxyUpstream `json:"upstreams,omitempty"`
+	LoadBalancingPolicy string             `json:"load_balancing_policy,omitempty"`
+}
+
+type npmProxyUpstream struct {
 	ForwardScheme string `json:"forward_scheme"`
 	ForwardHost   string `json:"forward_host"`
 	ForwardPort   int    `json:"forward_port"`
-	ForwardPath   string `json:"forward_path,omitempty"`
+	Weight        int    `json:"weight,omitempty"`
 }
 
 type npmProxyHost struct {
-	ID                         int               `json:"id"`
-	CreatedOn                  string            `json:"created_on"`
-	ModifiedOn                 string            `json:"modified_on"`
-	OwnerUserID                int               `json:"owner_user_id"`
-	ServiceName                string            `json:"service_name,omitempty"`
-	DomainNames                []string          `json:"domain_names"`
-	ListenPort                 int               `json:"listen_port"`
-	ListenPorts                []int             `json:"listen_ports,omitempty"`
-	ForwardScheme              string            `json:"forward_scheme"`
-	ForwardHost                string            `json:"forward_host"`
+	ID                         int                `json:"id"`
+	CreatedOn                  string             `json:"created_on"`
+	ModifiedOn                 string             `json:"modified_on"`
+	OwnerUserID                int                `json:"owner_user_id"`
+	ServiceName                string             `json:"service_name,omitempty"`
+	DomainNames                []string           `json:"domain_names"`
+	ListenPort                 int                `json:"listen_port"`
+	ListenPorts                []int              `json:"listen_ports,omitempty"`
+	ForwardScheme              string             `json:"forward_scheme"`
+	ForwardHost                string             `json:"forward_host"`
 	ForwardPort                int                `json:"forward_port"`
+	Upstreams                  []npmProxyUpstream `json:"upstreams,omitempty"`
+	LoadBalancingPolicy        string             `json:"load_balancing_policy,omitempty"`
 	Locations                  []npmProxyLocation `json:"locations,omitempty"`
 	AccessListID               int                `json:"access_list_id"`
-	CertificateID              any               `json:"certificate_id"`
-	SSLForced                  bool              `json:"ssl_forced"`
-	Meta                       map[string]any    `json:"meta"`
-	AllowWebsocketUpgrade      bool              `json:"allow_websocket_upgrade"`
-	HTTP2Support               bool              `json:"http2_support"`
-	Enabled                    bool              `json:"enabled"`
-	HSTSEnabled                bool              `json:"hsts_enabled"`
-	HSTSSubdomains             bool              `json:"hsts_subdomains"`
-	TrustForwardedProto        bool              `json:"trust_forwarded_proto"`
-	ForwardAuth                ForwardAuthConfig `json:"forward_auth,omitempty"`
-	UpstreamInsecureSkipVerify bool              `json:"upstream_insecure_skip_verify,omitempty"`
-	Owner                      npmUser           `json:"owner,omitempty"`
-	Certificate                *npmCertificate   `json:"certificate,omitempty"`
-	AccessList                 *npmAccessList    `json:"access_list,omitempty"`
+	CertificateID              any                `json:"certificate_id"`
+	SSLForced                  bool               `json:"ssl_forced"`
+	Meta                       map[string]any     `json:"meta"`
+	AllowWebsocketUpgrade      bool               `json:"allow_websocket_upgrade"`
+	HTTP2Support               bool               `json:"http2_support"`
+	Enabled                    bool               `json:"enabled"`
+	HSTSEnabled                bool               `json:"hsts_enabled"`
+	HSTSSubdomains             bool               `json:"hsts_subdomains"`
+	TrustForwardedProto        bool               `json:"trust_forwarded_proto"`
+	ForwardAuth                ForwardAuthConfig  `json:"forward_auth,omitempty"`
+	UpstreamInsecureSkipVerify bool               `json:"upstream_insecure_skip_verify,omitempty"`
+	Owner                      npmUser            `json:"owner,omitempty"`
+	Certificate                *npmCertificate    `json:"certificate,omitempty"`
+	AccessList                 *npmAccessList     `json:"access_list,omitempty"`
 }
 
 type npmCertificate struct {
@@ -6399,6 +6639,12 @@ func (r *captureResponse) WriteHeader(statusCode int) { r.status = statusCode }
 
 func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxyHost {
 	scheme, host, port := splitBackend(s.Backend)
+	upstreams := siteProxyUpstreamsToNPM(s.Upstreams, s.Backend)
+	if len(upstreams) > 0 {
+		scheme = upstreams[0].ForwardScheme
+		host = upstreams[0].ForwardHost
+		port = upstreams[0].ForwardPort
+	}
 	defaultListenPort := 443
 	if s.NoTLS {
 		defaultListenPort = 80
@@ -6454,12 +6700,23 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 	if len(s.Locations) > 0 {
 		locations = make([]npmProxyLocation, 0, len(s.Locations))
 		for _, loc := range s.Locations {
+			locUpstreams := proxyUpstreamsToNPM(loc.Upstreams, loc.Backend)
+			locScheme := loc.ForwardScheme
+			locHost := loc.ForwardHost
+			locPort := loc.ForwardPort
+			if len(locUpstreams) > 0 {
+				locScheme = locUpstreams[0].ForwardScheme
+				locHost = locUpstreams[0].ForwardHost
+				locPort = locUpstreams[0].ForwardPort
+			}
 			locations = append(locations, npmProxyLocation{
-				Path:          loc.Path,
-				ForwardScheme: loc.ForwardScheme,
-				ForwardHost:   loc.ForwardHost,
-				ForwardPort:   loc.ForwardPort,
-				ForwardPath:   loc.ForwardPath,
+				Path:                loc.Path,
+				ForwardScheme:       locScheme,
+				ForwardHost:         locHost,
+				ForwardPort:         locPort,
+				ForwardPath:         loc.ForwardPath,
+				Upstreams:           locUpstreams,
+				LoadBalancingPolicy: loc.LoadBalancingPolicy,
 			})
 		}
 	}
@@ -6475,6 +6732,8 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		ForwardScheme:              scheme,
 		ForwardHost:                host,
 		ForwardPort:                port,
+		Upstreams:                  upstreams,
+		LoadBalancingPolicy:        s.LoadBalancingPolicy,
 		Locations:                  locations,
 		AccessListID:               s.AccessListID,
 		CertificateID:              certID,
@@ -6494,8 +6753,76 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 	}
 }
 
+func siteProxyUpstreamsToNPM(upstreams []ProxyUpstream, fallbackBackend string) []npmProxyUpstream {
+	normalized := normalizeProxyUpstreams(upstreams, fallbackBackend)
+	if len(normalized) <= 1 && len(upstreams) == 0 {
+		return nil
+	}
+	return proxyUpstreamsToNPM(normalized, "")
+}
+
+func proxyUpstreamsToNPM(upstreams []ProxyUpstream, fallbackBackend string) []npmProxyUpstream {
+	normalized := normalizeProxyUpstreams(upstreams, fallbackBackend)
+	if len(normalized) == 0 {
+		return nil
+	}
+	out := make([]npmProxyUpstream, 0, len(normalized))
+	for _, upstream := range normalized {
+		out = append(out, npmProxyUpstream{
+			ForwardScheme: upstream.ForwardScheme,
+			ForwardHost:   upstream.ForwardHost,
+			ForwardPort:   upstream.ForwardPort,
+			Weight:        upstream.Weight,
+		})
+	}
+	return out
+}
+
+func npmProxyUpstreamsToSite(upstreams []npmProxyUpstream, fallbackScheme string, fallbackHost string, fallbackPort int) []ProxyUpstream {
+	out := make([]ProxyUpstream, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		converted := npmProxyUpstreamToSite(upstream)
+		if strings.TrimSpace(converted.ForwardHost) == "" {
+			continue
+		}
+		out = append(out, converted)
+	}
+	if len(out) == 0 && strings.TrimSpace(fallbackHost) != "" {
+		out = append(out, npmProxyUpstreamToSite(npmProxyUpstream{
+			ForwardScheme: fallbackScheme,
+			ForwardHost:   fallbackHost,
+			ForwardPort:   fallbackPort,
+		}))
+	}
+	return normalizeProxyUpstreams(out, "")
+}
+
+func npmProxyUpstreamToSite(upstream npmProxyUpstream) ProxyUpstream {
+	scheme := defaultString(upstream.ForwardScheme, "http")
+	hostRaw := strings.TrimSpace(upstream.ForwardHost)
+	host, _ := splitHostAndPath(hostRaw)
+	port := upstream.ForwardPort
+	if port <= 0 {
+		if scheme == "https" {
+			port = 443
+		} else {
+			port = 80
+		}
+	}
+	return normalizeProxyUpstream(ProxyUpstream{
+		ForwardScheme: scheme,
+		ForwardHost:   host,
+		ForwardPort:   port,
+		Weight:        upstream.Weight,
+	})
+}
+
 func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
-	backend := fmt.Sprintf("%s://%s:%d", defaultString(p.ForwardScheme, "http"), strings.TrimSpace(p.ForwardHost), p.ForwardPort)
+	mainUpstreams := npmProxyUpstreamsToSite(p.Upstreams, defaultString(p.ForwardScheme, "http"), strings.TrimSpace(p.ForwardHost), p.ForwardPort)
+	backend := ""
+	if len(mainUpstreams) > 0 {
+		backend = mainUpstreams[0].Backend
+	}
 	challenge := "http"
 	wildcard := false
 	credentialID := ""
@@ -6564,13 +6891,16 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 			if upstreamPath != "" {
 				locBackend += upstreamPath
 			}
+			locUpstreams := npmProxyUpstreamsToSite(loc.Upstreams, scheme, host, port)
 			locations = append(locations, ProxyLocation{
-				Path:          strings.TrimSpace(loc.Path),
-				ForwardScheme: scheme,
-				ForwardHost:   host,
-				ForwardPort:   port,
-				ForwardPath:   upstreamPath,
-				Backend:       locBackend,
+				Path:                strings.TrimSpace(loc.Path),
+				ForwardScheme:       scheme,
+				ForwardHost:         host,
+				ForwardPort:         port,
+				ForwardPath:         upstreamPath,
+				Backend:             locBackend,
+				Upstreams:           locUpstreams,
+				LoadBalancingPolicy: strings.TrimSpace(loc.LoadBalancingPolicy),
 			})
 		}
 	}
@@ -6581,6 +6911,8 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		ServiceName:                strings.TrimSpace(p.ServiceName),
 		Domain:                     joinListenDomainsWithPorts(p.DomainNames, p.ListenPort, p.ListenPorts),
 		Backend:                    backend,
+		Upstreams:                  mainUpstreams,
+		LoadBalancingPolicy:        strings.TrimSpace(p.LoadBalancingPolicy),
 		Locations:                  locations,
 		AccessListID:               p.AccessListID,
 		Wildcard:                   wildcard,

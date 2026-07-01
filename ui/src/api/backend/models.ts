@@ -103,6 +103,15 @@ export interface ProxyLocation {
 	forwardHost: string;
 	forwardPort: number;
 	forwardPath?: string;
+	upstreams?: ProxyUpstream[];
+	loadBalancingPolicy?: string;
+}
+
+export interface ProxyUpstream {
+	forwardScheme: string;
+	forwardHost: string;
+	forwardPort: number;
+	weight?: number;
 }
 
 export interface ForwardAuthConfig {
@@ -145,6 +154,8 @@ export interface ProxyHost {
 	forwardScheme: string;
 	forwardHost: string;
 	forwardPort: number;
+	upstreams?: ProxyUpstream[];
+	loadBalancingPolicy?: string;
 	accessListId: number;
 	certificateId: number;
 	sslForced: boolean;

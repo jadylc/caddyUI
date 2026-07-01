@@ -12,12 +12,12 @@ import {
 	Loading,
 	LocationsFields,
 	SSLOptionsFields,
+	UpstreamsFields,
 } from "src/components";
 import { type ForwardAuthProviderID, forwardAuthProviders } from "src/forwardAuthProviders";
 import { useAutheliaSettings, useAuthentikSettings, useProxyHost, useSetProxyHost } from "src/hooks";
 import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { T } from "src/locale";
-import { validateNumber, validateString } from "src/modules/Validations";
 import { showObjectSuccess } from "src/notifications";
 import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
@@ -63,6 +63,77 @@ const formatListenPorts = (listenPort?: number, listenPorts?: number[]) => {
 	const ports = source.filter((port, index, values) => port > 0 && values.indexOf(port) === index);
 	return ports.join(",");
 };
+
+const normalizeUpstreams = (upstreams: any, fallback?: any) => {
+	const source = Array.isArray(upstreams) && upstreams.length ? upstreams : fallback ? [fallback] : [];
+	return source
+		.map((item: any) => {
+			const forwardScheme = item?.forwardScheme === "https" ? "https" : "http";
+			const forwardHost = String(item?.forwardHost || "").trim();
+			const forwardPort = Number(item?.forwardPort || (forwardScheme === "https" ? 443 : 80));
+			const weight = Number(item?.weight || 1);
+			if (!forwardHost || !Number.isInteger(forwardPort) || forwardPort < 1 || forwardPort > 65535) {
+				return null;
+			}
+			return {
+				forwardScheme,
+				forwardHost,
+				forwardPort,
+				weight: Number.isInteger(weight) && weight >= 0 ? weight : 1,
+			};
+		})
+		.filter(Boolean);
+};
+
+const normalizeLocations = (locations: any[] = []) =>
+	locations
+		.filter((loc) => String(loc?.path || "").trim() !== "")
+		.map((loc) => {
+			const upstreams = normalizeUpstreams(loc.upstreams, {
+				forwardScheme: loc.forwardScheme,
+				forwardHost: loc.forwardHost,
+				forwardPort: loc.forwardPort,
+				weight: 1,
+			});
+			const first = upstreams[0] ?? {
+				forwardScheme: loc.forwardScheme || "http",
+				forwardHost: loc.forwardHost || "",
+				forwardPort: Number(loc.forwardPort || 80),
+			};
+			return {
+				...loc,
+				path: String(loc.path || "").trim(),
+				forwardScheme: first.forwardScheme,
+				forwardHost: first.forwardHost,
+				forwardPort: Number(first.forwardPort || 0),
+				forwardPath: String(loc.forwardPath || "").trim(),
+				upstreams,
+				loadBalancingPolicy: String(loc.loadBalancingPolicy || ""),
+			};
+		});
+
+const initialLocations = (locations: any[] = []) =>
+	locations.map((loc) => {
+		const upstreams = normalizeUpstreams(loc.upstreams, {
+			forwardScheme: loc.forwardScheme,
+			forwardHost: loc.forwardHost,
+			forwardPort: loc.forwardPort,
+			weight: 1,
+		});
+		const first = upstreams[0] ?? {
+			forwardScheme: loc.forwardScheme || "http",
+			forwardHost: loc.forwardHost || "",
+			forwardPort: Number(loc.forwardPort || 80),
+		};
+		return {
+			...loc,
+			forwardScheme: first.forwardScheme,
+			forwardHost: first.forwardHost,
+			forwardPort: Number(first.forwardPort || 80),
+			upstreams,
+			loadBalancingPolicy: loc.loadBalancingPolicy || "",
+		};
+	});
 
 const showProxyHostModal = (id: number | "new", initialData?: any) => {
 	EasyModal.show(ProxyHostModal, { id, initialData } as ShowProps);
@@ -188,13 +259,29 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 					: { enabled: true, provider: forwardAuthProvider, useGlobal: true }
 				: { enabled: false, provider: "", upstream: "", uri: "", copyHeaders: [], useGlobal: false };
 		const listenPorts = parseListenPorts(values.listenPort);
+		const upstreams = normalizeUpstreams(values.upstreams, {
+			forwardScheme: values.forwardScheme,
+			forwardHost: values.forwardHost,
+			forwardPort: values.forwardPort,
+			weight: 1,
+		});
+		const primaryUpstream = upstreams[0] ?? {
+			forwardScheme: values.forwardScheme || "http",
+			forwardHost: values.forwardHost || "",
+			forwardPort: Number(values.forwardPort || 0),
+		};
 
 		const payload = {
 			...values,
 			id: id === "new" ? undefined : id,
 			listenPort: listenPorts[0] || 0,
 			listenPorts,
-			forwardPort: Number(values.forwardPort || 0),
+			forwardScheme: primaryUpstream.forwardScheme,
+			forwardHost: primaryUpstream.forwardHost,
+			forwardPort: Number(primaryUpstream.forwardPort || 0),
+			upstreams,
+			loadBalancingPolicy: String(values.loadBalancingPolicy || ""),
+			locations: normalizeLocations(values.locations),
 			accessListId: Number(values.accessListId || 0),
 			forwardAuth,
 			certificateId:
@@ -240,13 +327,21 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 							forwardScheme: initialData?.forwardScheme ?? data?.forwardScheme ?? "http",
 							forwardHost: initialData?.forwardHost ?? data?.forwardHost ?? "",
 							forwardPort: initialData?.forwardPort ?? data?.forwardPort ?? undefined,
+							upstreams: normalizeUpstreams(initialData?.upstreams ?? data?.upstreams, {
+								forwardScheme: initialData?.forwardScheme ?? data?.forwardScheme ?? "http",
+								forwardHost: initialData?.forwardHost ?? data?.forwardHost ?? "",
+								forwardPort: initialData?.forwardPort ?? data?.forwardPort ?? 80,
+								weight: 1,
+							}),
+							loadBalancingPolicy:
+								initialData?.loadBalancingPolicy ?? data?.loadBalancingPolicy ?? "",
 							accessListId: initialData?.accessListId ?? data?.accessListId ?? 0,
-														upstreamInsecureSkipVerify:
+							upstreamInsecureSkipVerify:
 								initialData?.upstreamInsecureSkipVerify ??
 								data?.upstreamInsecureSkipVerify ??
 								false,
 							// Locations tab
-							locations: initialData?.locations ?? data?.locations ?? [],
+							locations: initialLocations(initialData?.locations ?? data?.locations ?? []),
 							// SSL tab
 							certificateId: initialData?.certificateId ?? data?.certificateId ?? 0,
 							sslForced: initialData?.sslForced ?? data?.sslForced ?? false,
@@ -376,95 +471,10 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 														</div>
 													)}
 												</Field>
-												<div className="row">
-													<div className="col-md-3">
-														<Field name="forwardScheme">
-															{({ field, form }: any) => (
-																<div className="mb-3">
-																	<label
-																		className="form-label"
-																		htmlFor="forwardScheme"
-																	>
-																		<T id="host.forward-scheme" />
-																	</label>
-																	<select
-																		id="forwardScheme"
-																		className={`form-control ${form.errors.forwardScheme && form.touched.forwardScheme ? "is-invalid" : ""}`}
-																		required
-																		{...field}
-																	>
-																		<option value="http">http</option>
-																		<option value="https">https</option>
-																	</select>
-																	{form.errors.forwardScheme ? (
-																		<div className="invalid-feedback">
-																			{form.errors.forwardScheme &&
-																			form.touched.forwardScheme
-																				? form.errors.forwardScheme
-																				: null}
-																		</div>
-																	) : null}
-																</div>
-															)}
-														</Field>
-													</div>
-													<div className="col-md-6">
-														<Field name="forwardHost" validate={validateString(1, 255)}>
-															{({ field, form }: any) => (
-																<div className="mb-3">
-																	<label className="form-label" htmlFor="forwardHost">
-																		<T id="proxy-host.forward-host" />
-																	</label>
-																	<input
-																		id="forwardHost"
-																		type="text"
-																		className={`form-control ${form.errors.forwardHost && form.touched.forwardHost ? "is-invalid" : ""}`}
-																		required
-																		placeholder="example.com"
-																		{...field}
-																	/>
-																	{form.errors.forwardHost ? (
-																		<div className="invalid-feedback">
-																			{form.errors.forwardHost &&
-																			form.touched.forwardHost
-																				? form.errors.forwardHost
-																				: null}
-																		</div>
-																	) : null}
-																</div>
-															)}
-														</Field>
-													</div>
-													<div className="col-md-3">
-														<Field name="forwardPort" validate={validateNumber(1, 65535)}>
-															{({ field, form }: any) => (
-																<div className="mb-3">
-																	<label className="form-label" htmlFor="forwardPort">
-																		<T id="host.forward-port" />
-																	</label>
-																	<input
-																		id="forwardPort"
-																		type="number"
-																		min={1}
-																		max={65535}
-																		className={`form-control ${form.errors.forwardPort && form.touched.forwardPort ? "is-invalid" : ""}`}
-																		required
-																		placeholder="eg: 8081"
-																		{...field}
-																	/>
-																	{form.errors.forwardPort ? (
-																		<div className="invalid-feedback">
-																			{form.errors.forwardPort &&
-																			form.touched.forwardPort
-																				? form.errors.forwardPort
-																				: null}
-																		</div>
-																	) : null}
-																</div>
-															)}
-														</Field>
-													</div>
-												</div>
+												<h4 className="py-2">
+													<T id="load-balancing.upstreams" />
+												</h4>
+												<UpstreamsFields />
 												<AccessField />
 												<div className="my-3">
 													<h4 className="py-2">

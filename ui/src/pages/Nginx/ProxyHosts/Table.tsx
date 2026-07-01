@@ -58,6 +58,43 @@ const forwardAuthName = (forwardAuth: any) => {
 	return "Authelia";
 };
 
+const getUpstreams = (host: ProxyHost) => {
+	const upstreams = host.upstreams?.length
+		? host.upstreams
+		: [
+				{
+					forwardScheme: host.forwardScheme,
+					forwardHost: host.forwardHost,
+					forwardPort: host.forwardPort,
+					weight: 1,
+				},
+			];
+	return upstreams.filter((item) => item.forwardHost && item.forwardPort);
+};
+
+const loadBalancingLabel = (policy?: string) => {
+	switch (policy) {
+		case "round_robin":
+			return "round robin";
+		case "weighted_round_robin":
+			return "weighted";
+		case "least_conn":
+			return "least conn";
+		case "first":
+			return "first";
+		case "ip_hash":
+			return "IP hash";
+		case "client_ip_hash":
+			return "client IP hash";
+		case "uri_hash":
+			return "URI hash";
+		case "random":
+			return "random";
+		default:
+			return "";
+	}
+};
+
 export default function Table({
 	data,
 	isFetching,
@@ -134,13 +171,32 @@ export default function Table({
 				id: "forwardHost",
 				header: intl.formatMessage({ id: "column.destination" }),
 				sortingFn: (a, b) => {
-					const aVal = `${a.original.forwardHost}:${a.original.forwardPort}`;
-					const bVal = `${b.original.forwardHost}:${b.original.forwardPort}`;
+					const aFirst = getUpstreams(a.original)[0];
+					const bFirst = getUpstreams(b.original)[0];
+					const aVal = `${aFirst?.forwardHost || ""}:${aFirst?.forwardPort || ""}`;
+					const bVal = `${bFirst?.forwardHost || ""}:${bFirst?.forwardPort || ""}`;
 					return aVal.localeCompare(bVal);
 				},
 				cell: (info: any) => {
 					const value = info.getValue();
-					return `${value.forwardScheme}://${value.forwardHost}:${value.forwardPort}`;
+					const upstreams = getUpstreams(value);
+					const first = upstreams[0];
+					if (!first) {
+						return <span className="text-muted">-</span>;
+					}
+					return (
+						<div className="d-flex flex-column">
+							<span>{`${first.forwardScheme}://${first.forwardHost}:${first.forwardPort}`}</span>
+							{upstreams.length > 1 ? (
+								<span className="text-secondary small">
+									<T id="load-balancing.upstreams-count" tData={{ count: String(upstreams.length) }} />
+									{loadBalancingLabel(value.loadBalancingPolicy)
+										? ` · ${loadBalancingLabel(value.loadBalancingPolicy)}`
+										: ""}
+								</span>
+							) : null}
+						</div>
+					);
 				},
 			}),
 			columnHelper.accessor((row: any) => row, {

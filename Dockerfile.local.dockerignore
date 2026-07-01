@@ -1,0 +1,12 @@
+.git
+.github
+.claude
+_tmp
+docs
+
+**/node_modules
+**/.cache
+**/.vite
+
+*.log
+*.tmp

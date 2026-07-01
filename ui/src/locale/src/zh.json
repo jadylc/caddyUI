@@ -701,6 +701,51 @@
   "lets-encrypt-via-http": {
     "defaultMessage": "申请证书（HTTP 验证）"
   },
+  "load-balancing.add-upstream": {
+    "defaultMessage": "添加上游"
+  },
+  "load-balancing.policy": {
+    "defaultMessage": "负载均衡策略"
+  },
+  "load-balancing.policy.default": {
+    "defaultMessage": "默认"
+  },
+  "load-balancing.policy.random": {
+    "defaultMessage": "随机"
+  },
+  "load-balancing.policy.round-robin": {
+    "defaultMessage": "轮询"
+  },
+  "load-balancing.policy.weighted-round-robin": {
+    "defaultMessage": "加权轮询"
+  },
+  "load-balancing.policy.least-conn": {
+    "defaultMessage": "最少连接"
+  },
+  "load-balancing.policy.first": {
+    "defaultMessage": "优先第一个可用"
+  },
+  "load-balancing.policy.ip-hash": {
+    "defaultMessage": "客户端 IP 哈希"
+  },
+  "load-balancing.policy.client-ip-hash": {
+    "defaultMessage": "可信客户端 IP 哈希"
+  },
+  "load-balancing.policy.uri-hash": {
+    "defaultMessage": "URI 哈希"
+  },
+  "load-balancing.upstream.invalid": {
+    "defaultMessage": "请填写有效的上游主机、端口和权重。"
+  },
+  "load-balancing.upstreams": {
+    "defaultMessage": "上游服务"
+  },
+  "load-balancing.upstreams-count": {
+    "defaultMessage": "{count} 个上游"
+  },
+  "load-balancing.weight": {
+    "defaultMessage": "权重"
+  },
   "forward-auth": {
     "defaultMessage": "Forward Auth"
   },
