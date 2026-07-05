@@ -2,6 +2,7 @@ import cn from "classnames";
 import type { Table as ReactTable } from "@tanstack/react-table";
 import { TableBody } from "./TableBody";
 import { TableHeader } from "./TableHeader";
+import { TablePagination } from "./TablePagination";
 
 interface TableLayoutProps<TFields> {
 	tableInstance: ReactTable<TFields>;
@@ -14,12 +15,15 @@ interface TableLayoutProps<TFields> {
 function TableLayout<TFields>(props: TableLayoutProps<TFields>) {
 	const hasRows = props.tableInstance.getRowModel().rows.length > 0;
 	return (
-		<div className="table-responsive">
-			<table className={cn("table table-vcenter table-selectable mb-0", props.tableClassName)}>
-				{hasRows ? <TableHeader tableInstance={props.tableInstance} /> : null}
-				<TableBody {...props} />
-			</table>
-		</div>
+		<>
+			<div className="table-responsive">
+				<table className={cn("table table-vcenter table-selectable mb-0", props.tableClassName)}>
+					{hasRows ? <TableHeader tableInstance={props.tableInstance} /> : null}
+					<TableBody {...props} />
+				</table>
+			</div>
+			<TablePagination tableInstance={props.tableInstance} />
+		</>
 	);
 }
 

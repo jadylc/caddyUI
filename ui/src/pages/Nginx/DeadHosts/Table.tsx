@@ -2,6 +2,7 @@ import { IconDotsVertical, IconEdit, IconPower, IconTrash } from "@tabler/icons-
 import {
 	createColumnHelper,
 	getCoreRowModel,
+	getPaginationRowModel,
 	getSortedRowModel,
 	type SortingState,
 	useReactTable,
@@ -155,6 +156,7 @@ export default function Table({ data, isFetching, onEdit, onDelete, onDisableTog
 		state: { sorting },
 		onSortingChange: setSorting,
 		getCoreRowModel: getCoreRowModel(),
+		getPaginationRowModel: getPaginationRowModel(),
 		getSortedRowModel: getSortedRowModel(),
 		rowCount: data.length,
 		meta: {

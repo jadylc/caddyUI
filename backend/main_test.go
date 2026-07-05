@@ -3615,6 +3615,84 @@ func TestCheckDynamicDNSItemStatusUpdatesCloudflareProxiedRecord(t *testing.T) {
 	}
 }
 
+func TestCheckDynamicDNSItemStatusUpdatesDNSPodRecord(t *testing.T) {
+	oldDNSPodAPIBaseURL := dnspodAPIBaseURL
+	t.Cleanup(func() {
+		dnspodAPIBaseURL = oldDNSPodAPIBaseURL
+	})
+
+	ipServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("203.0.113.50"))
+	}))
+	defer ipServer.Close()
+
+	modifyCalled := false
+	dnspodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm error = %v", err)
+		}
+		if r.Form.Get("login_token") != "12345,token" {
+			t.Fatalf("login_token = %q, want 12345,token", r.Form.Get("login_token"))
+		}
+		switch r.URL.Path {
+		case "/Domain.List":
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"domains":[{"id":321,"name":"cc.cd"}]}`))
+		case "/Record.List":
+			if r.Form.Get("domain_id") != "321" {
+				t.Fatalf("domain_id = %q, want 321", r.Form.Get("domain_id"))
+			}
+			if r.Form.Get("sub_domain") != "jady" {
+				t.Fatalf("sub_domain = %q, want jady", r.Form.Get("sub_domain"))
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"records":[{"id":654,"name":"jady","type":"A","value":"203.0.113.51","ttl":"600","line":"默认","line_id":"0"}]}`))
+		case "/Record.Modify":
+			modifyCalled = true
+			if r.Form.Get("domain_id") != "321" {
+				t.Fatalf("domain_id = %q, want 321", r.Form.Get("domain_id"))
+			}
+			if r.Form.Get("record_id") != "654" {
+				t.Fatalf("record_id = %q, want 654", r.Form.Get("record_id"))
+			}
+			if r.Form.Get("sub_domain") != "jady" {
+				t.Fatalf("sub_domain = %q, want jady", r.Form.Get("sub_domain"))
+			}
+			if r.Form.Get("record_type") != "A" {
+				t.Fatalf("record_type = %q, want A", r.Form.Get("record_type"))
+			}
+			if r.Form.Get("value") != "203.0.113.50" {
+				t.Fatalf("value = %q, want 203.0.113.50", r.Form.Get("value"))
+			}
+			_, _ = w.Write([]byte(`{"status":{"code":"1","message":"ok"},"record":{"id":654,"name":"jady","type":"A","value":"203.0.113.50","ttl":"600","line":"默认","line_id":"0"}}`))
+		default:
+			t.Fatalf("unexpected DNSPod API request: %s", r.URL.String())
+		}
+	}))
+	defer dnspodServer.Close()
+	dnspodAPIBaseURL = dnspodServer.URL
+
+	errText, meta := checkDynamicDNSItemStatus(npmDynamicDNS{
+		Name:          "jady",
+		DomainNames:   []string{"jady.cc.cd"},
+		CredentialID:  "cred-1",
+		IPv4:          true,
+		CheckInterval: "5m",
+		IPServiceURL:  ipServer.URL,
+		Enabled:       true,
+	}, []Credential{{ID: "cred-1", Provider: "dnspod", DNSPodToken: "12345,token"}}, map[string][]string{})
+	if errText != "" {
+		t.Fatalf("checkDynamicDNSItemStatus error = %q", errText)
+	}
+	if !modifyCalled {
+		t.Fatalf("DNSPod Record.Modify was not called")
+	}
+	if got := meta["resolved_ips"]; strings.Join(got.([]string), ",") != "203.0.113.50" {
+		t.Fatalf("resolved_ips = %#v, want updated source IP", got)
+	}
+}
+
 func startTestDNSServer(t *testing.T, records map[string]string) (string, func()) {
 	t.Helper()
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")

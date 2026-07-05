@@ -1,5 +1,5 @@
 import { IconDotsVertical, IconDownload, IconEdit, IconRefresh, IconTrash } from "@tabler/icons-react";
-import { createColumnHelper, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { createColumnHelper, getCoreRowModel, getPaginationRowModel, useReactTable } from "@tanstack/react-table";
 import { useMemo } from "react";
 import type { Certificate } from "src/api/backend";
 import {
@@ -285,6 +285,7 @@ export default function Table({ data, isFetching, onDelete, onEdit, onRenew, onD
 		columns,
 		data,
 		getCoreRowModel: getCoreRowModel(),
+		getPaginationRowModel: getPaginationRowModel(),
 		rowCount: data.length,
 		meta: {
 			isFetching,

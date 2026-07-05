@@ -70,6 +70,7 @@ var (
 	publicIPFallbackEndpoints = []string{"https://ifconfig.me/ip", "https://ipinfo.io/ip", "https://api.ip.sb/ip", "https://icanhazip.com"}
 	aliyunDNSAPIBaseURL       = "https://alidns.aliyuncs.com/"
 	cloudflareAPIBaseURL      = "https://api.cloudflare.com/client/v4"
+	dnspodAPIBaseURL          = "https://dnsapi.cn"
 	confSuffix                = ".conf"
 	metaSuffix                = ".json"
 	probeTimeout              = 2 * time.Second
@@ -4758,10 +4759,76 @@ type cloudflareResultInfo struct {
 	TotalCount int `json:"total_count"`
 }
 
+type dnspodAPIStatus struct {
+	Code    flexibleJSONString `json:"code"`
+	Message string             `json:"message"`
+}
+
+type dnspodDomainListResponse struct {
+	Status  dnspodAPIStatus `json:"status"`
+	Domains []dnspodDomain  `json:"domains"`
+}
+
+type dnspodRecordListResponse struct {
+	Status  dnspodAPIStatus   `json:"status"`
+	Records []dnspodDNSRecord `json:"records"`
+}
+
+type dnspodRecordResponse struct {
+	Status dnspodAPIStatus `json:"status"`
+	Record dnspodDNSRecord `json:"record"`
+}
+
+type dnspodDomain struct {
+	ID   flexibleJSONString `json:"id"`
+	Name string             `json:"name"`
+}
+
+type dnspodDNSRecord struct {
+	ID     flexibleJSONString `json:"id"`
+	Name   string             `json:"name"`
+	Type   string             `json:"type"`
+	Value  string             `json:"value"`
+	TTL    flexibleJSONString `json:"ttl"`
+	Line   string             `json:"line"`
+	LineID flexibleJSONString `json:"line_id"`
+}
+
 type dynamicDNSRecordTarget struct {
 	Zone string
 	RR   string
 	Host string
+}
+
+type dnspodResolvedRecordTarget struct {
+	DomainID   string
+	DomainName string
+	RR         string
+	Host       string
+}
+
+type flexibleJSONString string
+
+func (s *flexibleJSONString) UnmarshalJSON(data []byte) error {
+	value := strings.TrimSpace(string(data))
+	if value == "" || value == "null" {
+		*s = ""
+		return nil
+	}
+	if strings.HasPrefix(value, `"`) {
+		var out string
+		if err := json.Unmarshal(data, &out); err != nil {
+			return err
+		}
+		*s = flexibleJSONString(out)
+		return nil
+	}
+	*s = flexibleJSONString(value)
+	return nil
+}
+
+func (s flexibleJSONString) String() string {
+	return string(s)
 }
 
 type aliyunDNSRecordsResponse struct {
@@ -10950,21 +11017,26 @@ func checkDynamicDNSItemStatus(item npmDynamicDNS, creds []Credential, publicIPC
 	missingMessages := []string{}
 	resolvedAll := []string{}
 	for _, configured := range dynamicDNSDomains(item.DomainNames) {
-		if cred.Provider == "alidns" {
+		if cred.Provider == "alidns" || cred.Provider == "dnspod" {
 			targets, err := dynamicDNSRecordTargets(configured)
 			if err != nil {
-				missingMessages = append(missingMessages, fmt.Sprintf("%s Aliyun 记录目标解析失败: %v", configured, err))
+				missingMessages = append(missingMessages, fmt.Sprintf("%s %s 记录目标解析失败: %v", configured, dnsProviderDisplayName(cred.Provider), err))
 				continue
 			}
 			for _, target := range targets {
-				remoteIPs, err := syncAliyunDynamicDNSRecord(target, cred, publicIPs, wantIPv4, wantIPv6)
+				var remoteIPs []string
+				if cred.Provider == "dnspod" {
+					remoteIPs, err = syncDNSPodDynamicDNSRecord(target, cred, publicIPs, wantIPv4, wantIPv6)
+				} else {
+					remoteIPs, err = syncAliyunDynamicDNSRecord(target, cred, publicIPs, wantIPv4, wantIPv6)
+				}
 				if err != nil {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s Aliyun 记录检查失败: %v", target.Host, err))
+					missingMessages = append(missingMessages, fmt.Sprintf("%s %s 记录检查失败: %v", target.Host, dnsProviderDisplayName(cred.Provider), err))
 					continue
 				}
 				resolvedAll = append(resolvedAll, remoteIPs...)
 				if len(remoteIPs) == 0 {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s Aliyun 未找到匹配的 A/AAAA 记录", target.Host))
+					missingMessages = append(missingMessages, fmt.Sprintf("%s %s 未找到匹配的 A/AAAA 记录", target.Host, dnsProviderDisplayName(cred.Provider)))
 					continue
 				}
 				if !stringSetsEqual(remoteIPs, publicIPs) {
@@ -11120,6 +11192,225 @@ func syncAliyunDynamicDNSRecord(target dynamicDNSRecordTarget, cred Credential, 
 		remoteIPs = replaceIPValue(remoteIPs, record.Value, desired)
 	}
 	return uniqueSortedStrings(remoteIPs), nil
+}
+
+func syncDNSPodDynamicDNSRecord(target dynamicDNSRecordTarget, cred Credential, publicIPs []string, wantIPv4 bool, wantIPv6 bool) ([]string, error) {
+	records, resolvedTarget, err := dnspodDNSRecordsForTarget(target, cred)
+	if err != nil {
+		return nil, err
+	}
+	remoteIPs := []string{}
+	for _, record := range records {
+		if !dynamicDNSRecordTypeWanted(record.Type, wantIPv4, wantIPv6) {
+			continue
+		}
+		if ip := net.ParseIP(record.Value); ip != nil {
+			remoteIPs = append(remoteIPs, ip.String())
+		}
+		desired := dynamicDNSDesiredIPForRecordType(record.Type, publicIPs)
+		if desired == "" || dynamicDNSRecordContentMatches(record.Value, desired) {
+			continue
+		}
+		if err := updateDNSPodDNSRecordContent(record, resolvedTarget, cred, desired); err != nil {
+			return uniqueSortedStrings(remoteIPs), err
+		}
+		remoteIPs = replaceIPValue(remoteIPs, record.Value, desired)
+	}
+	return uniqueSortedStrings(remoteIPs), nil
+}
+
+func dnspodDNSRecordsForTarget(target dynamicDNSRecordTarget, cred Credential) ([]dnspodDNSRecord, dnspodResolvedRecordTarget, error) {
+	resolvedTarget, err := resolveDNSPodRecordTarget(target, cred)
+	if err != nil {
+		return nil, dnspodResolvedRecordTarget{}, err
+	}
+	out := []dnspodDNSRecord{}
+	const pageSize = 100
+	for offset := 0; ; offset += pageSize {
+		params := url.Values{}
+		params.Set("domain_id", resolvedTarget.DomainID)
+		params.Set("sub_domain", resolvedTarget.RR)
+		params.Set("offset", strconv.Itoa(offset))
+		params.Set("length", strconv.Itoa(pageSize))
+		var resp dnspodRecordListResponse
+		if err := dnspodAPIRequest("Record.List", params, cred, &resp, map[string]bool{"10": true}); err != nil {
+			return nil, resolvedTarget, err
+		}
+		for _, record := range resp.Records {
+			if normalizeDynamicDNSRR(record.Name) != resolvedTarget.RR {
+				continue
+			}
+			if !dynamicDNSRecordTypeWanted(record.Type, true, true) {
+				continue
+			}
+			out = append(out, record)
+		}
+		if len(resp.Records) < pageSize {
+			break
+		}
+	}
+	return out, resolvedTarget, nil
+}
+
+func resolveDNSPodRecordTarget(target dynamicDNSRecordTarget, cred Credential) (dnspodResolvedRecordTarget, error) {
+	target.Zone = normalizedDomainMonitorHost(target.Zone)
+	target.RR = normalizeDynamicDNSRR(target.RR)
+	if target.Zone == "" || target.RR == "" {
+		return dnspodResolvedRecordTarget{}, errors.New("DNSPod DNS 记录目标为空")
+	}
+	host := strings.ToLower(strings.Trim(strings.TrimSpace(target.Host), "."))
+	if host == "" {
+		host = target.Zone
+		if target.RR != "@" {
+			host = target.RR + "." + target.Zone
+		}
+	}
+	domains, err := dnspodListDomains(cred)
+	if err != nil {
+		return dnspodResolvedRecordTarget{}, err
+	}
+	for _, domain := range domains {
+		name := normalizedDomainMonitorHost(domain.Name)
+		if name == "" || name != target.Zone {
+			continue
+		}
+		if id := strings.TrimSpace(domain.ID.String()); id != "" {
+			return dnspodResolvedRecordTarget{DomainID: id, DomainName: name, RR: target.RR, Host: host}, nil
+		}
+	}
+	var best dnspodDomain
+	bestName := ""
+	for _, domain := range domains {
+		name := normalizedDomainMonitorHost(domain.Name)
+		if name == "" {
+			continue
+		}
+		if host == name || strings.HasSuffix(host, "."+name) {
+			if len(name) > len(bestName) {
+				best = domain
+				bestName = name
+			}
+		}
+	}
+	if bestName == "" || strings.TrimSpace(best.ID.String()) == "" {
+		return dnspodResolvedRecordTarget{}, fmt.Errorf("DNSPod 未找到 %s 所属 Zone", host)
+	}
+	rr := strings.TrimSuffix(host, "."+bestName)
+	if rr == host || rr == "" {
+		rr = "@"
+	}
+	rr = normalizeDynamicDNSRR(rr)
+	if rr == "" {
+		return dnspodResolvedRecordTarget{}, fmt.Errorf("DNSPod 记录名为空: %s", host)
+	}
+	return dnspodResolvedRecordTarget{DomainID: strings.TrimSpace(best.ID.String()), DomainName: bestName, RR: rr, Host: host}, nil
+}
+
+func dnspodListDomains(cred Credential) ([]dnspodDomain, error) {
+	if strings.TrimSpace(cred.DNSPodToken) == "" {
+		return nil, errors.New("DNSPod API Token 为空")
+	}
+	out := []dnspodDomain{}
+	const pageSize = 100
+	for offset := 0; ; offset += pageSize {
+		params := url.Values{}
+		params.Set("offset", strconv.Itoa(offset))
+		params.Set("length", strconv.Itoa(pageSize))
+		var resp dnspodDomainListResponse
+		if err := dnspodAPIRequest("Domain.List", params, cred, &resp, nil); err != nil {
+			return nil, err
+		}
+		for _, domain := range resp.Domains {
+			if normalizedDomainMonitorHost(domain.Name) == "" || strings.TrimSpace(domain.ID.String()) == "" {
+				continue
+			}
+			out = append(out, domain)
+		}
+		if len(resp.Domains) < pageSize {
+			break
+		}
+	}
+	return out, nil
+}
+
+func updateDNSPodDNSRecordContent(record dnspodDNSRecord, target dnspodResolvedRecordTarget, cred Credential, content string) error {
+	recordID := strings.TrimSpace(record.ID.String())
+	if recordID == "" {
+		return errors.New("DNSPod DNS 记录缺少记录 ID")
+	}
+	recordType := strings.ToUpper(strings.TrimSpace(record.Type))
+	if recordType == "" {
+		return errors.New("DNSPod DNS 记录缺少 Type")
+	}
+	rr := normalizeDynamicDNSRR(record.Name)
+	if rr == "" {
+		rr = target.RR
+	}
+	line := strings.TrimSpace(record.Line)
+	if line == "" {
+		line = "默认"
+	}
+	params := url.Values{}
+	params.Set("domain_id", target.DomainID)
+	params.Set("record_id", recordID)
+	params.Set("sub_domain", rr)
+	params.Set("record_type", recordType)
+	params.Set("record_line", line)
+	params.Set("value", content)
+	if ttl := strings.TrimSpace(record.TTL.String()); ttl != "" && ttl != "0" {
+		params.Set("ttl", ttl)
+	}
+	var resp dnspodRecordResponse
+	return dnspodAPIRequest("Record.Modify", params, cred, &resp, nil)
+}
+
+func dnspodAPIRequest(action string, params url.Values, cred Credential, target any, allowedCodes map[string]bool) error {
+	if strings.TrimSpace(cred.DNSPodToken) == "" {
+		return errors.New("DNSPod API Token 为空")
+	}
+	if params == nil {
+		params = url.Values{}
+	}
+	params.Set("login_token", strings.TrimSpace(cred.DNSPodToken))
+	params.Set("format", "json")
+	endpoint := strings.TrimRight(dnspodAPIBaseURL, "/") + "/" + action
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(params.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "my-caddy-ui/1.0")
+	client := &http.Client{Timeout: 8 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("DNSPod API 返回 %s: %s", res.Status, strings.TrimSpace(string(data)))
+	}
+	var statusResp struct {
+		Status dnspodAPIStatus `json:"status"`
+	}
+	if err := json.Unmarshal(data, &statusResp); err != nil {
+		return err
+	}
+	code := strings.TrimSpace(statusResp.Status.Code.String())
+	if code != "" && code != "1" && !allowedCodes[code] {
+		if statusResp.Status.Message != "" {
+			return fmt.Errorf("DNSPod API 返回失败: %s: %s", code, statusResp.Status.Message)
+		}
+		return fmt.Errorf("DNSPod API 返回失败: %s", code)
+	}
+	if target == nil || len(bytes.TrimSpace(data)) == 0 {
+		return nil
+	}
+	return json.Unmarshal(data, target)
 }
 
 func aliyunDNSRecordsForTarget(target dynamicDNSRecordTarget, cred Credential) ([]aliyunDNSRecord, error) {

@@ -2,6 +2,7 @@ import { IconCopy, IconDotsVertical, IconEdit, IconPower, IconTrash } from "@tab
 import {
 	createColumnHelper,
 	getCoreRowModel,
+	getPaginationRowModel,
 	getSortedRowModel,
 	type SortingState,
 	useReactTable,
@@ -189,7 +190,10 @@ export default function Table({
 							<span>{`${first.forwardScheme}://${first.forwardHost}:${first.forwardPort}`}</span>
 							{upstreams.length > 1 ? (
 								<span className="text-secondary small">
-									<T id="load-balancing.upstreams-count" tData={{ count: String(upstreams.length) }} />
+									<T
+										id="load-balancing.upstreams-count"
+										tData={{ count: String(upstreams.length) }}
+									/>
 									{loadBalancingLabel(value.loadBalancingPolicy)
 										? ` · ${loadBalancingLabel(value.loadBalancingPolicy)}`
 										: ""}
@@ -340,6 +344,7 @@ export default function Table({
 		state: { sorting },
 		onSortingChange: setSorting,
 		getCoreRowModel: getCoreRowModel(),
+		getPaginationRowModel: getPaginationRowModel(),
 		getSortedRowModel: getSortedRowModel(),
 		rowCount: data.length,
 		meta: {

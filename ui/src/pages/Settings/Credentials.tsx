@@ -12,7 +12,7 @@ import {
 	getCredentials,
 	updateCredential,
 } from "src/api/backend";
-import { Button, LoadingPage } from "src/components";
+import { Button, LoadingPage, useLocalPagination } from "src/components";
 import { showHelpModal } from "src/modals";
 import { ConfirmDiscardModal } from "src/modals/ConfirmDiscardModal";
 import { showError, showSuccess } from "src/notifications";
@@ -122,6 +122,8 @@ export default function CredentialsSettingsPage() {
 		queryKey: ["credentials"],
 		queryFn: getCredentials,
 	});
+	const credentials = data || [];
+	const { pageItems: credentialPageItems, pagination: credentialPagination } = useLocalPagination(credentials);
 
 	if (isLoading) return <LoadingPage />;
 	if (isError) return <Alert variant="danger">{error?.message || "Unknown error"}</Alert>;
@@ -392,7 +394,7 @@ export default function CredentialsSettingsPage() {
 						</tr>
 					</thead>
 					<tbody>
-						{(data || []).map((item: CredentialSummary) => (
+						{credentialPageItems.map((item: CredentialSummary) => (
 							<tr key={item.id}>
 								<td>
 									<div className="fw-semibold">{item.name}</div>
@@ -417,7 +419,7 @@ export default function CredentialsSettingsPage() {
 								</td>
 							</tr>
 						))}
-						{!data?.length ? (
+						{!credentials.length ? (
 							<tr>
 								<td colSpan={5} className="text-muted text-center py-4">
 									暂无凭据
@@ -427,6 +429,7 @@ export default function CredentialsSettingsPage() {
 					</tbody>
 				</table>
 			</div>
+			{credentialPagination}
 		</div>
 	);
 }

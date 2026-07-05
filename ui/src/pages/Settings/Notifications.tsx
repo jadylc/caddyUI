@@ -2,7 +2,7 @@ import { IconHelp, IconPlus } from "@tabler/icons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "react-bootstrap/Alert";
 import { deleteNotificationChannel, getNotificationChannels, testNotificationChannel } from "src/api/backend";
-import { Button, LoadingPage } from "src/components";
+import { Button, LoadingPage, useLocalPagination } from "src/components";
 import { notificationChannelLabel, showHelpModal, showNotificationChannelModal } from "src/modals";
 import { showError, showSuccess } from "src/notifications";
 
@@ -12,12 +12,14 @@ export default function NotificationSettingsPage() {
 		queryKey: ["notification-channels"],
 		queryFn: getNotificationChannels,
 	});
+	const channels = data?.channels || [];
+	const events = data?.events || [];
+	const { pageItems: channelPageItems, pagination: channelPagination } = useLocalPagination(channels);
 
 	if (isLoading) return <LoadingPage />;
 	if (isError) return <Alert variant="danger">{error?.message || "Unknown error"}</Alert>;
 
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ["notification-channels"] });
-	const events = data?.events || [];
 
 	const remove = async (id?: number) => {
 		if (!id) return;
@@ -84,7 +86,7 @@ export default function NotificationSettingsPage() {
 						</tr>
 					</thead>
 					<tbody>
-						{(data?.channels || []).map((item) => (
+						{channelPageItems.map((item) => (
 							<tr key={item.id}>
 								<td>
 									<div>{item.name}</div>
@@ -127,7 +129,7 @@ export default function NotificationSettingsPage() {
 								</td>
 							</tr>
 						))}
-						{!data?.channels?.length ? (
+						{!channels.length ? (
 							<tr>
 								<td colSpan={6} className="text-muted text-center py-4">
 									暂无推送渠道
@@ -137,6 +139,7 @@ export default function NotificationSettingsPage() {
 					</tbody>
 				</table>
 			</div>
+			{channelPagination}
 		</div>
 	);
 }

@@ -1,4 +1,4 @@
-import { createColumnHelper, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { createColumnHelper, getCoreRowModel, getPaginationRowModel, useReactTable } from "@tanstack/react-table";
 import { useMemo } from "react";
 import type { AuditLog } from "src/api/backend";
 import { EventFormatter } from "src/components";
@@ -49,6 +49,7 @@ export default function Table({ data, isFetching, onSelectItem }: Props) {
 		columns,
 		data,
 		getCoreRowModel: getCoreRowModel(),
+		getPaginationRowModel: getPaginationRowModel(),
 		rowCount: data.length,
 		meta: {
 			isFetching,
