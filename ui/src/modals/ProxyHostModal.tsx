@@ -43,17 +43,22 @@ const parseListenPorts = (value: any): number[] => {
 	return ports;
 };
 
-const validateListenPorts = (value: any) => {
+const validateListenPorts = (value: any, sslForced?: boolean) => {
 	const raw = Array.isArray(value) ? value.join(",") : String(value || "");
 	if (!raw.trim()) return undefined;
 	if (!/^\d+(,\d+)*$/.test(raw)) {
-		return "监听端口必须是英文逗号分隔的数字，例如 443,11111";
+		return "监听端口必须是英文逗号分隔的数字，例如 80,8080";
 	}
+	const ports: number[] = [];
 	for (const part of raw.split(",")) {
 		const port = Number(part);
 		if (!Number.isInteger(port) || port <= 0 || port > 65535) {
 			return "监听端口必须是 1-65535 的数字";
 		}
+		ports.push(port);
+	}
+	if (!sslForced && ports.includes(443)) {
+		return "仅 HTTP 模式不能监听 443；请留空/使用 80，或启用 SSL";
 	}
 	return undefined;
 };
@@ -368,9 +373,17 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 							meta: initialData?.meta ?? data?.meta ?? {},
 						} as any
 					}
+					validate={(values: any) => {
+						const errors: Record<string, string> = {};
+						const listenPortError = validateListenPorts(values.listenPort, values.sslForced);
+						if (listenPortError) {
+							errors.listenPort = listenPortError;
+						}
+						return errors;
+					}}
 					onSubmit={onSubmit}
 				>
-					{() => (
+					{({ values }) => (
 						<Form>
 							<DirtySync dirtyRef={dirtyRef} />
 							<Modal.Header closeButton>
@@ -445,7 +458,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 													)}
 												</Field>
 												<DomainNamesField isWildcardPermitted dnsProviderWildcardSupported />
-												<Field name="listenPort" validate={validateListenPorts}>
+												<Field name="listenPort">
 													{({ field, form }: any) => (
 														<div className="mb-3">
 															<label className="form-label" htmlFor="listenPort">
@@ -455,11 +468,11 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 																id="listenPort"
 																type="text"
 																className={`form-control ${form.errors.listenPort && form.touched.listenPort ? "is-invalid" : ""}`}
-																placeholder="443,11111"
+																placeholder={values.sslForced ? "443,11111" : "80,8080"}
 																{...field}
 															/>
 															<small className="text-secondary">
-																<T id="host.listen-port.help" />
+																<T id={values.sslForced ? "host.listen-port.help-ssl" : "host.listen-port.help-http"} />
 															</small>
 															{form.errors.listenPort ? (
 																<div className="invalid-feedback">

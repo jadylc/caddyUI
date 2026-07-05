@@ -684,7 +684,13 @@
     "defaultMessage": "监听端口"
   },
   "host.listen-port.help": {
-    "defaultMessage": "留空表示使用 Caddy 默认的 80/443；多个端口用逗号分隔，例如 443,11111。"
+    "defaultMessage": "留空表示使用 Caddy 默认端口；多个端口用英文逗号分隔。"
+  },
+  "host.listen-port.help-http": {
+    "defaultMessage": "仅 HTTP 时建议留空或使用 80/8080，不要填 443。"
+  },
+  "host.listen-port.help-ssl": {
+    "defaultMessage": "启用 SSL 时留空使用默认 443；多个端口用英文逗号分隔，例如 443,11111。"
   },
   "hosts": {
     "defaultMessage": "主机列表"

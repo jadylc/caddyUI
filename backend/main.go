@@ -649,6 +649,10 @@ func validateCredential(c Credential) error {
 	if strings.TrimSpace(c.Name) == "" {
 		return errors.New("凭据名称不能为空")
 	}
+	return validateCredentialSecret(c)
+}
+
+func validateCredentialSecret(c Credential) error {
 	switch c.Provider {
 	case "alidns":
 		if c.AliyunKey == "" || c.AliyunSecret == "" {
@@ -2739,6 +2743,13 @@ func validateSiteProxyConfig(s Site) error {
 	if strings.TrimSpace(s.Backend) == "" && len(s.Upstreams) == 0 {
 		return errors.New("后端地址不能为空")
 	}
+	if s.NoTLS {
+		for _, domain := range splitDomains(s.Domain) {
+			if _, port, ok := splitHostListenPort(domain); ok && port == 443 {
+				return errors.New("仅 HTTP 模式不能监听 443；请留空/使用 80，或启用 SSL")
+			}
+		}
+	}
 	if err := validateProxyUpstreams(normalizeProxyUpstreams(s.Upstreams, s.Backend), s.LoadBalancingPolicy, "默认上游"); err != nil {
 		return err
 	}
@@ -4360,7 +4371,6 @@ func certDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	deleteManagedCertPlaceholder(body.Domain)
-	_ = deleteACMECredentialForDomain(body.Domain, "")
 	writeJSON(w, http.StatusOK, map[string]int{"removed_dirs": removed})
 }
 
@@ -5375,7 +5385,7 @@ func npmDynamicDNSHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		item.ID = stableID(fmt.Sprintf("dynamic-dns:%s:%d", item.Name, time.Now().UnixNano()))
 		stampNPMDynamicDNS(&item, "", true)
-		if err := validateDynamicDNS(item); err != nil {
+		if err := validateDynamicDNSForSave(item); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -5414,7 +5424,7 @@ func npmDynamicDNSItemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	handleJSONBackedItem[npmDynamicDNS](w, r, prefix, dynamicDNSPath, loadNPMDynamicDNS, func(item *npmDynamicDNS) {
 		stampNPMDynamicDNS(item, "", true)
-	}, syncDynamicDNSAndReload)
+	}, syncDynamicDNSAndReload, validateDynamicDNSForSave)
 }
 
 func checkDynamicDNSItem(w http.ResponseWriter, r *http.Request, id int) {
@@ -5998,44 +6008,6 @@ func npmCertificateAuthoritiesHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func certCredentialID(cert npmCertificate) string {
-	if cert.Meta == nil {
-		return ""
-	}
-	if v, ok := cert.Meta["credential_id"].(string); ok {
-		return strings.TrimSpace(v)
-	}
-	if v, ok := cert.Meta["credentialId"].(string); ok {
-		return strings.TrimSpace(v)
-	}
-	return ""
-}
-
-func deleteACMECredentialForDomain(domain string, credentialID string) error {
-	domain = certDomainName(domain)
-	creds, err := loadCredentials()
-	if err != nil {
-		return err
-	}
-	next := make([]Credential, 0, len(creds))
-	for _, cred := range creds {
-		remove := false
-		if credentialID != "" && cred.ID == credentialID {
-			remove = true
-		}
-		if strings.EqualFold(strings.TrimSpace(cred.Name), "ACME "+domain) {
-			remove = true
-		}
-		if !remove {
-			next = append(next, cred)
-		}
-	}
-	if len(next) == len(creds) {
-		return nil
-	}
-	return saveCredentials(next)
-}
-
 func npmTestHTTPCertificateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -6339,7 +6311,6 @@ func npmCertificateItemHandler(w http.ResponseWriter, r *http.Request) {
 		for _, d := range cert.DomainNames {
 			_, _ = clearCertFiles(d)
 			deleteManagedCertPlaceholder(d)
-			_ = deleteACMECredentialForDomain(d, certCredentialID(cert))
 		}
 		writeJSON(w, http.StatusOK, true)
 	default:
@@ -8065,21 +8036,19 @@ func renderLayer4Config(streams []npmStream) (string, error) {
 }
 
 func renderDynamicDNSConfig(items []npmDynamicDNS, creds []Credential) (string, error) {
-	credByID := map[string]Credential{}
-	for _, c := range creds {
-		credByID[c.ID] = c
-	}
 	var b strings.Builder
 	for _, item := range items {
 		if !item.Enabled {
 			continue
 		}
 		if err := validateDynamicDNS(item); err != nil {
-			return "", err
+			log.Printf("skip dynamic dns %s: %v", item.Name, err)
+			continue
 		}
-		cred, ok := credByID[item.CredentialID]
-		if !ok {
-			return "", fmt.Errorf("动态 DNS %s 使用的 DNS 凭据不存在", item.Name)
+		cred, err := dynamicDNSCredentialForItem(item, creds)
+		if err != nil {
+			log.Printf("skip dynamic dns %s: %v", item.Name, err)
+			continue
 		}
 		if b.Len() > 0 {
 			b.WriteString("\n")
@@ -8134,6 +8103,25 @@ func renderDynamicDNSConfig(items []npmDynamicDNS, creds []Credential) (string, 
 		b.WriteString("}\n")
 	}
 	return b.String(), nil
+}
+
+func dynamicDNSCredentialForItem(item npmDynamicDNS, creds []Credential) (Credential, error) {
+	if strings.TrimSpace(item.CredentialID) == "" {
+		return Credential{}, fmt.Errorf("动态 DNS %s 需要选择 DNS 凭据", item.Name)
+	}
+	cred, ok := findCredential(item.CredentialID, creds)
+	if !ok {
+		return Credential{}, fmt.Errorf("动态 DNS %s 使用的 DNS 凭据不存在", item.Name)
+	}
+	switch cred.Provider {
+	case "alidns", "cloudflare", "dnspod", "he":
+	default:
+		return Credential{}, fmt.Errorf("动态 DNS %s 使用了不支持的 DNS 提供商：%s", item.Name, cred.Provider)
+	}
+	if err := validateCredentialSecret(cred); err != nil {
+		return Credential{}, fmt.Errorf("动态 DNS %s 使用的 DNS 凭据无效: %w", item.Name, err)
+	}
+	return cred, nil
 }
 
 func dynamicDNSIPSourceURLs(item npmDynamicDNS) []string {
@@ -8340,6 +8328,18 @@ func validateDynamicDNS(item npmDynamicDNS) error {
 		return err
 	}
 	return nil
+}
+
+func validateDynamicDNSForSave(item npmDynamicDNS) error {
+	if err := validateDynamicDNS(item); err != nil {
+		return err
+	}
+	creds, err := loadCredentials()
+	if err != nil {
+		return err
+	}
+	_, err = dynamicDNSCredentialForItem(item, creds)
+	return err
 }
 
 func normalizeDynamicDNSIPServiceURL(value string) string {
@@ -9505,6 +9505,12 @@ func handleJSONBackedItem[T any](w http.ResponseWriter, r *http.Request, prefix 
 	if action != "" && r.Method == http.MethodPost {
 		if action == "enable" || action == "disable" {
 			setNPMItemEnabled(any(&items[idx]), action == "enable")
+			if action == "enable" && len(validators) > 0 && validators[0] != nil {
+				if err := validators[0](items[idx]); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
 			if err := saveJSONFile(path, items); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -10931,17 +10937,20 @@ func checkDynamicDNSItemStatus(item npmDynamicDNS, creds []Credential, publicIPC
 	if !wantIPv4 && !wantIPv6 {
 		wantIPv4 = true
 	}
+	meta["dns_provider"] = effectiveDynamicDNSProvider(item, creds)
+	cred, err := dynamicDNSCredentialForItem(item, creds)
+	if err != nil {
+		return err.Error(), meta
+	}
 	publicIPs, err := currentPublicIPs(wantIPv4, wantIPv6, item.IPServiceURL, publicIPCache)
 	if err != nil {
 		return "获取当前公网 IP 失败: " + err.Error(), meta
 	}
 	meta["current_ips"] = publicIPs
-	meta["dns_provider"] = effectiveDynamicDNSProvider(item, creds)
 	missingMessages := []string{}
 	resolvedAll := []string{}
-	cred, hasCred := findCredential(item.CredentialID, creds)
 	for _, configured := range dynamicDNSDomains(item.DomainNames) {
-		if hasCred && cred.Provider == "alidns" {
+		if cred.Provider == "alidns" {
 			targets, err := dynamicDNSRecordTargets(configured)
 			if err != nil {
 				missingMessages = append(missingMessages, fmt.Sprintf("%s Aliyun 记录目标解析失败: %v", configured, err))
@@ -10965,7 +10974,7 @@ func checkDynamicDNSItemStatus(item npmDynamicDNS, creds []Credential, publicIPC
 			continue
 		}
 		for _, host := range dynamicDNSHostnames(configured) {
-			if hasCred && cred.Provider == "cloudflare" {
+			if cred.Provider == "cloudflare" {
 				remoteIPs, err := syncCloudflareDynamicDNSRecord(host, cred, publicIPs, wantIPv4, wantIPv6)
 				if err != nil {
 					missingMessages = append(missingMessages, fmt.Sprintf("%s Cloudflare 记录检查失败: %v", host, err))

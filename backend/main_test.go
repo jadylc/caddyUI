@@ -1283,6 +1283,40 @@ func TestCertsHandlerShowsIssuedCertificateWithoutSiteMetadata(t *testing.T) {
 	}
 }
 
+func TestCertDeleteHandlerDoesNotDeleteDNSCredentials(t *testing.T) {
+	tmp := t.TempDir()
+	withTempPaths(t, tmp)
+	oldSitesDir := sitesDir
+	oldCaddyCertsDir := caddyCertsDir
+	sitesDir = filepath.Join(tmp, "sites")
+	caddyCertsDir = filepath.Join(tmp, "certs")
+	t.Cleanup(func() {
+		sitesDir = oldSitesDir
+		caddyCertsDir = oldCaddyCertsDir
+	})
+	if err := os.MkdirAll(sitesDir, 0755); err != nil {
+		t.Fatalf("MkdirAll sitesDir error = %v", err)
+	}
+	if err := saveCredentials([]Credential{{ID: "cred-he", Name: "ACME orphan.example.com", Provider: "he", HEAPIKey: "he-key"}}); err != nil {
+		t.Fatalf("saveCredentials error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/certs/delete", bytes.NewReader([]byte(`{"domain":"orphan.example.com"}`)))
+	rr := httptest.NewRecorder()
+	certDeleteHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", rr.Code, rr.Body.String())
+	}
+	creds, err := loadCredentials()
+	if err != nil {
+		t.Fatalf("loadCredentials error = %v", err)
+	}
+	if len(creds) != 1 || creds[0].ID != "cred-he" {
+		t.Fatalf("credentials = %#v, want DNS credential retained", creds)
+	}
+}
+
 func TestCertsHandlerShowsPendingAutoCertificateFromProxyHost(t *testing.T) {
 	tmp := t.TempDir()
 	oldSitesDir := sitesDir
@@ -1784,6 +1818,26 @@ func TestValidateSiteProxyConfigRejectsMixedSchemes(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("validateSiteProxyConfig error = nil, want mixed scheme error")
+	}
+}
+
+func TestValidateSiteProxyConfigRejectsHTTPOnlyListenPort443(t *testing.T) {
+	err := validateSiteProxyConfig(Site{
+		Domain:  "app.example.com:443",
+		Backend: "http://127.0.0.1:8080",
+		NoTLS:   true,
+	})
+	if err == nil {
+		t.Fatalf("validateSiteProxyConfig error = nil, want http-only port 443 error")
+	}
+
+	err = validateSiteProxyConfig(Site{
+		Domain:  "app.example.com:8080",
+		Backend: "http://127.0.0.1:8080",
+		NoTLS:   true,
+	})
+	if err != nil {
+		t.Fatalf("validateSiteProxyConfig error = %v, want nil for custom HTTP port", err)
 	}
 }
 
@@ -3161,6 +3215,53 @@ func TestLoadDynamicDNSExposesDNSProviderFromCredential(t *testing.T) {
 	}
 }
 
+func TestRenderDynamicDNSConfigSkipsExistingItemWithMissingCredential(t *testing.T) {
+	conf, err := renderDynamicDNSConfig([]npmDynamicDNS{
+		{
+			Name:          "jady.qd.je",
+			DomainNames:   []string{"jady.qd.je"},
+			CredentialID:  "missing",
+			IPv4:          true,
+			CheckInterval: "5m",
+			Enabled:       true,
+		},
+		{
+			Name:          "jady.qzz.io",
+			DomainNames:   []string{"jady.qzz.io"},
+			CredentialID:  "cred-he",
+			IPv4:          true,
+			CheckInterval: "5m",
+			Enabled:       true,
+		},
+	}, []Credential{{ID: "cred-he", Name: "HE shared", Provider: "he", HEAPIKey: "he-key"}})
+	if err != nil {
+		t.Fatalf("renderDynamicDNSConfig error = %v", err)
+	}
+	if !strings.Contains(conf, "provider he") || !strings.Contains(conf, "qzz.io jady") {
+		t.Fatalf("rendered config = %q, want valid HE dynamic DNS item", conf)
+	}
+	if strings.Contains(conf, "qd.je") {
+		t.Fatalf("rendered config = %q, should skip item with missing credential", conf)
+	}
+}
+
+func TestValidateDynamicDNSForSaveRejectsMissingCredential(t *testing.T) {
+	tmp := t.TempDir()
+	withTempPaths(t, tmp)
+
+	err := validateDynamicDNSForSave(npmDynamicDNS{
+		Name:          "jady.qzz.io",
+		DomainNames:   []string{"jady.qzz.io"},
+		CredentialID:  "missing",
+		IPv4:          true,
+		CheckInterval: "5m",
+		Enabled:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "DNS 凭据不存在") {
+		t.Fatalf("validateDynamicDNSForSave error = %v, want missing credential error", err)
+	}
+}
+
 func TestCheckDynamicDNSItemStatusUsesCustomIPServiceURL(t *testing.T) {
 	oldIPv4Endpoint := publicIPv4Endpoint
 	t.Cleanup(func() {
@@ -3182,12 +3283,13 @@ func TestCheckDynamicDNSItemStatusUsesCustomIPServiceURL(t *testing.T) {
 	errText, meta := checkDynamicDNSItemStatus(npmDynamicDNS{
 		Name:          "alist",
 		DomainNames:   []string{"alist.example.com"},
+		CredentialID:  "cred-he",
 		IPv4:          true,
 		CheckInterval: "5m",
 		Resolvers:     []string{resolverAddr},
 		IPServiceURL:  ipServer.URL + "/ip",
 		Enabled:       true,
-	}, nil, map[string][]string{})
+	}, []Credential{{ID: "cred-he", Provider: "he", HEAPIKey: "he-key"}}, map[string][]string{})
 	if errText != "" {
 		t.Fatalf("checkDynamicDNSItemStatus error = %q", errText)
 	}
@@ -3314,10 +3416,14 @@ func TestRefreshDynamicDNSStatusesReportsRemoteARecordMismatch(t *testing.T) {
 	resolverAddr, closeResolver := startTestDNSServer(t, map[string]string{"alist.example.com.": "198.51.100.20"})
 	defer closeResolver()
 
+	if err := saveCredentials([]Credential{{ID: "cred-he", Provider: "he", HEAPIKey: "he-key"}}); err != nil {
+		t.Fatalf("saveCredentials error = %v", err)
+	}
 	items := []npmDynamicDNS{{
 		ID:            1,
 		Name:          "alist",
 		DomainNames:   []string{"alist.example.com"},
+		CredentialID:  "cred-he",
 		IPv4:          true,
 		CheckInterval: "5m",
 		Resolvers:     []string{resolverAddr},
