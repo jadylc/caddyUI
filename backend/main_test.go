@@ -1317,6 +1317,50 @@ func TestCertDeleteHandlerDoesNotDeleteDNSCredentials(t *testing.T) {
 	}
 }
 
+func TestVersionCheckUsesAppVersion(t *testing.T) {
+	oldVersion := appVersion
+	appVersion = "v1.0.8"
+	t.Cleanup(func() { appVersion = oldVersion })
+
+	req := httptest.NewRequest(http.MethodGet, "/version/check", nil)
+	rr := httptest.NewRecorder()
+	npmVersionCheckHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", rr.Code, rr.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if got["current"] != "v1.0.8" || got["latest"] != "v1.0.8" {
+		t.Fatalf("version response = %#v, want v1.0.8", got)
+	}
+}
+
+func TestSortByModifiedOnDesc(t *testing.T) {
+	type row struct {
+		Name       string
+		CreatedOn  string
+		ModifiedOn string
+	}
+	items := []row{
+		{Name: "old", CreatedOn: "2026-07-01T10:00:00+08:00", ModifiedOn: "2026-07-02T10:00:00+08:00"},
+		{Name: "newest", CreatedOn: "2026-07-01T10:00:00+08:00", ModifiedOn: "2026-07-04T10:00:00+08:00"},
+		{Name: "created-fallback", CreatedOn: "2026-07-03T10:00:00+08:00"},
+	}
+
+	sortByModifiedOnDesc(items, func(item row) (string, string) { return item.ModifiedOn, item.CreatedOn })
+
+	got := []string{items[0].Name, items[1].Name, items[2].Name}
+	want := []string{"newest", "created-fallback", "old"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func TestCertsHandlerShowsPendingAutoCertificateFromProxyHost(t *testing.T) {
 	tmp := t.TempDir()
 	oldSitesDir := sitesDir

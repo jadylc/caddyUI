@@ -142,6 +142,7 @@ func notificationChannelsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		sortByModifiedOnDesc(items, func(item notificationChannel) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, map[string]any{"channels": items, "events": notificationEventSpecs})
 	case http.MethodPost:
 		var item notificationChannel

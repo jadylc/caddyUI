@@ -351,6 +351,8 @@ export interface DNSProvider {
 
 export interface CredentialSummary {
 	id: string;
+	createdOn?: string;
+	modifiedOn?: string;
 	name: string;
 	provider: string;
 	hasSecret: boolean;

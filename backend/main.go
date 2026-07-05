@@ -35,6 +35,7 @@ import (
 )
 
 var (
+	appVersion                = "v1.0.8"
 	sitesDir                  = "/config/sites"
 	managedCertPrefix         = "__cert_"
 	wildcardGroupPrefix       = "__wildcard_group_"
@@ -92,6 +93,8 @@ var errDomainRegistrationExpiryUnavailable = errors.New("域名注册到期信�
 // Credential 一条可复用凭据。同一 provider 允许多条（多账号）。
 type Credential struct {
 	ID                string       `json:"id"`
+	CreatedOn         string       `json:"created_on,omitempty"`
+	ModifiedOn        string       `json:"modified_on,omitempty"`
 	Name              string       `json:"name"`
 	Provider          string       `json:"provider"` // alidns | cloudflare | dnspod | he | digitalplat | dnshe
 	AliyunKey         string       `json:"aliyun_key,omitempty"`
@@ -539,6 +542,10 @@ func loadCredentials() ([]Credential, error) {
 		if err := json.Unmarshal(data, &creds); err != nil {
 			return nil, err
 		}
+		fallback := timestampFromFile(credentialPath)
+		for i := range creds {
+			stampCredential(&creds[i], fallback, false)
+		}
 		return creds, nil
 	}
 	// 旧格式（单对象），迁移
@@ -551,6 +558,7 @@ func loadCredentials() ([]Credential, error) {
 	}
 	legacy.ID = newCredID()
 	legacy.Name = "默认凭据"
+	stampCredential(&legacy, timestampFromFile(credentialPath), true)
 	creds := []Credential{legacy}
 	if err := saveCredentials(creds); err != nil {
 		log.Printf("warn: migrate credentials.json: %v", err)
@@ -564,6 +572,10 @@ func saveCredentials(creds []Credential) error {
 	}
 	data, _ := json.MarshalIndent(creds, "", "  ")
 	return os.WriteFile(credentialPath, data, 0600)
+}
+
+func stampCredential(c *Credential, fallback string, touchModified bool) {
+	stampCreatedModified(&c.CreatedOn, &c.ModifiedOn, fallback, touchModified)
 }
 
 func findCredential(id string, creds []Credential) (Credential, bool) {
@@ -992,6 +1004,8 @@ func credentialsHandler(w http.ResponseWriter, r *http.Request) {
 		// 计算每条引用次数
 		type credView struct {
 			ID         string `json:"id"`
+			CreatedOn  string `json:"created_on"`
+			ModifiedOn string `json:"modified_on"`
 			Name       string `json:"name"`
 			Provider   string `json:"provider"`
 			HasSecret  bool   `json:"has_secret"`
@@ -1001,8 +1015,9 @@ func credentialsHandler(w http.ResponseWriter, r *http.Request) {
 		for _, c := range creds {
 			usage, _ := usageOfCredential(c.ID)
 			has := credentialHasSecret(c)
-			out = append(out, credView{c.ID, c.Name, c.Provider, has, len(usage)})
+			out = append(out, credView{c.ID, c.CreatedOn, c.ModifiedOn, c.Name, c.Provider, has, len(usage)})
 		}
+		sortByModifiedOnDesc(out, func(item credView) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		var c Credential
@@ -1020,6 +1035,7 @@ func credentialsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.ID = newCredID()
+		stampCredential(&c, "", true)
 		creds = append(creds, c)
 		if err := saveCredentials(creds); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1061,6 +1077,8 @@ func credentialItemHandler(w http.ResponseWriter, r *http.Request) {
 			"id":                   c.ID,
 			"name":                 c.Name,
 			"provider":             c.Provider,
+			"created_on":           c.CreatedOn,
+			"modified_on":          c.ModifiedOn,
 			"has_secret":           credentialHasSecret(c),
 			"aliyun_key":           c.AliyunKey,
 			"aliyun_secret":        c.AliyunSecret,
@@ -1078,6 +1096,8 @@ func credentialItemHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.ID = id
+		c.CreatedOn = creds[idx].CreatedOn
+		stampCredential(&c, "", true)
 		if err := validateCredential(c); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -4977,15 +4997,63 @@ func npmHealthHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	major, minor, revision := appVersionParts()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "OK",
 		"setup":  true,
 		"version": map[string]int{
-			"major":    2,
-			"minor":    0,
-			"revision": 0,
+			"major":    major,
+			"minor":    minor,
+			"revision": revision,
 		},
 	})
+}
+
+func appVersionParts() (int, int, int) {
+	value := strings.TrimPrefix(strings.TrimSpace(appVersion), "v")
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return 0, 0, 0
+	}
+	major, _ := strconv.Atoi(parts[0])
+	minor, _ := strconv.Atoi(parts[1])
+	revision, _ := strconv.Atoi(parts[2])
+	return major, minor, revision
+}
+
+func sortByModifiedOnDesc[T any](items []T, timestamps func(T) (string, string)) {
+	sort.SliceStable(items, func(i, j int) bool {
+		iModified, iCreated := timestamps(items[i])
+		jModified, jCreated := timestamps(items[j])
+		return modifiedOnAfter(iModified, iCreated, jModified, jCreated)
+	})
+}
+
+func modifiedOnAfter(iModified, iCreated, jModified, jCreated string) bool {
+	iValue := strings.TrimSpace(defaultString(iModified, iCreated))
+	jValue := strings.TrimSpace(defaultString(jModified, jCreated))
+	iTime, iOK := parseSortTimestamp(iValue)
+	jTime, jOK := parseSortTimestamp(jValue)
+	if iOK && jOK && !iTime.Equal(jTime) {
+		return iTime.After(jTime)
+	}
+	if iOK != jOK {
+		return iOK
+	}
+	if iValue == jValue {
+		return false
+	}
+	return iValue > jValue
+}
+
+func parseSortTimestamp(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
 }
 
 func localTimestamp(t time.Time) string {
@@ -5126,8 +5194,8 @@ func npmAuditLogItemHandler(w http.ResponseWriter, r *http.Request) {
 
 func npmVersionCheckHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"current":          "v2.0.0",
-		"latest":           "v2.0.0",
+		"current":          appVersion,
+		"latest":           appVersion,
 		"update_available": false,
 	})
 }
@@ -5213,6 +5281,7 @@ func npmProxyHostsHandler(w http.ResponseWriter, r *http.Request) {
 		for _, s := range sites {
 			out = append(out, siteToNPMProxyHost(s, certByDomain))
 		}
+		sortByModifiedOnDesc(out, func(item npmProxyHost) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		var p npmProxyHost
@@ -5316,6 +5385,7 @@ func npmRedirectionHostsHandler(w http.ResponseWriter, r *http.Request) {
 		for _, s := range sites {
 			out = append(out, siteToNPMRedirectionHost(s, certByDomain))
 		}
+		sortByModifiedOnDesc(out, func(item npmRedirectionHost) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		var item npmRedirectionHost
@@ -5365,6 +5435,7 @@ func npmDeadHostsHandler(w http.ResponseWriter, r *http.Request) {
 		for _, s := range sites {
 			out = append(out, siteToNPMDeadHost(s, certByDomain))
 		}
+		sortByModifiedOnDesc(out, func(item npmDeadHost) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		var item npmDeadHost
@@ -5409,6 +5480,7 @@ func npmStreamsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		sortByModifiedOnDesc(items, func(item npmStream) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, items)
 	case http.MethodPost:
 		var item npmStream
@@ -5443,6 +5515,7 @@ func npmDynamicDNSHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		sortByModifiedOnDesc(items, func(item npmDynamicDNS) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, items)
 	case http.MethodPost:
 		var item npmDynamicDNS
@@ -5556,6 +5629,7 @@ func npmDomainMonitorsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		sortByModifiedOnDesc(items, func(item npmDomainMonitor) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, items)
 	case http.MethodPost:
 		var item npmDomainMonitor
@@ -5651,6 +5725,7 @@ func npmWakeDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		sortByModifiedOnDesc(items, func(item npmWakeDevice) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, items)
 	case http.MethodPost:
 		body, err := io.ReadAll(r.Body)
@@ -5773,6 +5848,7 @@ func npmAccessListsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		sortByModifiedOnDesc(items, func(item npmAccessList) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, items)
 	case http.MethodPost:
 		var item npmAccessList
@@ -5808,6 +5884,7 @@ func npmCertificatesHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		certs := npmCertificates()
+		sortByModifiedOnDesc(certs, func(item npmCertificate) (string, string) { return item.ModifiedOn, item.CreatedOn })
 		writeJSON(w, http.StatusOK, certs)
 	case http.MethodPost:
 		var item npmCertificate
