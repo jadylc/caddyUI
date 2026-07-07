@@ -105,6 +105,8 @@ export interface ProxyLocation {
 	forwardPath?: string;
 	upstreams?: ProxyUpstream[];
 	loadBalancingPolicy?: string;
+	reverseProxyMode?: "inherit" | "custom";
+	reverseProxy?: ReverseProxyAdvancedConfig;
 }
 
 export interface ProxyUpstream {
@@ -121,6 +123,56 @@ export interface ForwardAuthConfig {
 	uri: string;
 	copyHeaders: string[];
 	useGlobal?: boolean;
+}
+
+export interface ReverseProxyAdvancedConfig {
+	healthCheck?: ReverseProxyHealthCheckConfig;
+	retry?: ReverseProxyRetryConfig;
+	headers?: ReverseProxyHeadersConfig;
+	transport?: ReverseProxyTransportConfig;
+}
+
+export interface ReverseProxyHealthCheckConfig {
+	enabled?: boolean;
+	uri?: string;
+	interval?: string;
+	timeout?: string;
+	status?: string;
+	passiveEnabled?: boolean;
+	failDuration?: string;
+	maxFails?: number;
+	unhealthyStatus?: string;
+}
+
+export interface ReverseProxyRetryConfig {
+	enabled?: boolean;
+	tryDuration?: string;
+	tryInterval?: string;
+	retries?: number;
+	methods?: "" | "get_head";
+}
+
+export interface ProxyHeaderRule {
+	action?: "set" | "delete";
+	name?: string;
+	value?: string;
+}
+
+export interface ReverseProxyHeadersConfig {
+	hostMode?: "" | "host" | "upstream" | "custom";
+	hostValue?: string;
+	request?: ProxyHeaderRule[];
+	response?: ProxyHeaderRule[];
+}
+
+export interface ReverseProxyTransportConfig {
+	protocol?: "" | "h2c" | "http1";
+	tlsServerName?: string;
+	tlsInsecureSkipVerify?: boolean;
+	dialTimeout?: string;
+	responseHeaderTimeout?: string;
+	readTimeout?: string;
+	writeTimeout?: string;
 }
 
 export interface AutheliaSettings {
@@ -171,6 +223,7 @@ export interface ProxyHost {
 	trustForwardedProto: boolean;
 	forwardAuth?: ForwardAuthConfig;
 	upstreamInsecureSkipVerify?: boolean;
+	reverseProxy?: ReverseProxyAdvancedConfig;
 	// Expansions:
 	owner?: User;
 	accessList?: AccessList;

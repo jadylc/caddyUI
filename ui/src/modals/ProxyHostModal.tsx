@@ -11,8 +11,11 @@ import {
 	DomainNamesField,
 	Loading,
 	LocationsFields,
+	ReverseProxyAdvancedPanel,
 	SSLOptionsFields,
 	UpstreamsFields,
+	normalizeReverseProxyAdvanced,
+	withReverseProxyDefaults,
 } from "src/components";
 import { type ForwardAuthProviderID, forwardAuthProviders } from "src/forwardAuthProviders";
 import { useAutheliaSettings, useAuthentikSettings, useProxyHost, useSetProxyHost } from "src/hooks";
@@ -114,6 +117,9 @@ const normalizeLocations = (locations: any[] = []) =>
 				forwardPath: String(loc.forwardPath || "").trim(),
 				upstreams,
 				loadBalancingPolicy: String(loc.loadBalancingPolicy || ""),
+				reverseProxyMode: loc.reverseProxyMode === "custom" ? "custom" : "inherit",
+				reverseProxy:
+					loc.reverseProxyMode === "custom" ? normalizeReverseProxyAdvanced(loc.reverseProxy) : undefined,
 			};
 		});
 
@@ -137,6 +143,8 @@ const initialLocations = (locations: any[] = []) =>
 			forwardPort: Number(first.forwardPort || 80),
 			upstreams,
 			loadBalancingPolicy: loc.loadBalancingPolicy || "",
+			reverseProxyMode: loc.reverseProxyMode === "custom" ? "custom" : "inherit",
+			reverseProxy: withReverseProxyDefaults(loc.reverseProxy),
 		};
 	});
 
@@ -275,6 +283,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 			forwardHost: values.forwardHost || "",
 			forwardPort: Number(values.forwardPort || 0),
 		};
+		const reverseProxy = normalizeReverseProxyAdvanced(values.reverseProxy);
 
 		const payload = {
 			...values,
@@ -289,6 +298,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 			locations: normalizeLocations(values.locations),
 			accessListId: Number(values.accessListId || 0),
 			forwardAuth,
+			reverseProxy,
+			upstreamInsecureSkipVerify: !!reverseProxy.transport?.tlsInsecureSkipVerify,
 			certificateId:
 				values.sslForced && values.meta?.certificateBindings?.length
 					? -1
@@ -310,278 +321,302 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 		});
 	};
 
-	return (<>
-		<Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
-			{!isLoading && error && (
-				<Alert variant="danger" className="m-3">
-					{error?.message || "Unknown error"}
-				</Alert>
-			)}
-			{isLoading && <Loading noLogo />}
-			{!isLoading && data && (
-				<Formik
-					initialValues={
-						{
-							// Details tab
-							serviceName: initialData?.serviceName ?? data?.serviceName ?? "",
-							domainNames: initialData?.domainNames ?? data?.domainNames ?? [],
-							listenPort: formatListenPorts(
-								initialData?.listenPort ?? data?.listenPort,
-								initialData?.listenPorts ?? data?.listenPorts,
-							),
-							forwardScheme: initialData?.forwardScheme ?? data?.forwardScheme ?? "http",
-							forwardHost: initialData?.forwardHost ?? data?.forwardHost ?? "",
-							forwardPort: initialData?.forwardPort ?? data?.forwardPort ?? undefined,
-							upstreams: normalizeUpstreams(initialData?.upstreams ?? data?.upstreams, {
+	return (
+		<>
+			<Modal show={visible} onHide={handleClose} backdrop="static" keyboard size="lg">
+				{!isLoading && error && (
+					<Alert variant="danger" className="m-3">
+						{error?.message || "Unknown error"}
+					</Alert>
+				)}
+				{isLoading && <Loading noLogo />}
+				{!isLoading && data && (
+					<Formik
+						initialValues={
+							{
+								// Details tab
+								serviceName: initialData?.serviceName ?? data?.serviceName ?? "",
+								domainNames: initialData?.domainNames ?? data?.domainNames ?? [],
+								listenPort: formatListenPorts(
+									initialData?.listenPort ?? data?.listenPort,
+									initialData?.listenPorts ?? data?.listenPorts,
+								),
 								forwardScheme: initialData?.forwardScheme ?? data?.forwardScheme ?? "http",
 								forwardHost: initialData?.forwardHost ?? data?.forwardHost ?? "",
-								forwardPort: initialData?.forwardPort ?? data?.forwardPort ?? 80,
-								weight: 1,
-							}),
-							loadBalancingPolicy:
-								initialData?.loadBalancingPolicy ?? data?.loadBalancingPolicy ?? "",
-							accessListId: initialData?.accessListId ?? data?.accessListId ?? 0,
-							upstreamInsecureSkipVerify:
-								initialData?.upstreamInsecureSkipVerify ??
-								data?.upstreamInsecureSkipVerify ??
-								false,
-							// Locations tab
-							locations: initialLocations(initialData?.locations ?? data?.locations ?? []),
-							// SSL tab
-							certificateId: initialData?.certificateId ?? data?.certificateId ?? 0,
-							sslForced: initialData?.sslForced ?? data?.sslForced ?? false,
-							http2Support: initialData?.http2Support ?? data?.http2Support ?? false,
-							hstsEnabled: initialData?.hstsEnabled ?? data?.hstsEnabled ?? false,
-							hstsSubdomains: initialData?.hstsSubdomains ?? data?.hstsSubdomains ?? false,
-							trustForwardedProto: initialData?.trustForwardedProto ?? data?.trustForwardedProto ?? false,
-							forwardAuth: {
-								...defaultForwardAuth,
-								...(data?.forwardAuth ?? {}),
-								...(initialData?.forwardAuth ?? {}),
-								copyHeaders: Array.isArray(
-									initialData?.forwardAuth?.copyHeaders ??
-										data?.forwardAuth?.copyHeaders ??
-										defaultForwardAuth.copyHeaders,
-								)
-									? (
-											initialData?.forwardAuth?.copyHeaders ??
+								forwardPort: initialData?.forwardPort ?? data?.forwardPort ?? undefined,
+								upstreams: normalizeUpstreams(initialData?.upstreams ?? data?.upstreams, {
+									forwardScheme: initialData?.forwardScheme ?? data?.forwardScheme ?? "http",
+									forwardHost: initialData?.forwardHost ?? data?.forwardHost ?? "",
+									forwardPort: initialData?.forwardPort ?? data?.forwardPort ?? 80,
+									weight: 1,
+								}),
+								loadBalancingPolicy:
+									initialData?.loadBalancingPolicy ?? data?.loadBalancingPolicy ?? "",
+								accessListId: initialData?.accessListId ?? data?.accessListId ?? 0,
+								upstreamInsecureSkipVerify:
+									initialData?.upstreamInsecureSkipVerify ??
+									data?.upstreamInsecureSkipVerify ??
+									false,
+								reverseProxy: withReverseProxyDefaults(
+									initialData?.reverseProxy ?? data?.reverseProxy,
+									initialData?.upstreamInsecureSkipVerify ??
+										data?.upstreamInsecureSkipVerify ??
+										false,
+								),
+								// Locations tab
+								locations: initialLocations(initialData?.locations ?? data?.locations ?? []),
+								// SSL tab
+								certificateId: initialData?.certificateId ?? data?.certificateId ?? 0,
+								sslForced: initialData?.sslForced ?? data?.sslForced ?? false,
+								http2Support: initialData?.http2Support ?? data?.http2Support ?? false,
+								hstsEnabled: initialData?.hstsEnabled ?? data?.hstsEnabled ?? false,
+								hstsSubdomains: initialData?.hstsSubdomains ?? data?.hstsSubdomains ?? false,
+								trustForwardedProto:
+									initialData?.trustForwardedProto ?? data?.trustForwardedProto ?? false,
+								forwardAuth: {
+									...defaultForwardAuth,
+									...(data?.forwardAuth ?? {}),
+									...(initialData?.forwardAuth ?? {}),
+									copyHeaders: Array.isArray(
+										initialData?.forwardAuth?.copyHeaders ??
 											data?.forwardAuth?.copyHeaders ??
-											defaultForwardAuth.copyHeaders
-										).join("\n")
-									: (initialData?.forwardAuth?.copyHeaders ?? data?.forwardAuth?.copyHeaders ?? ""),
-							},
-							meta: initialData?.meta ?? data?.meta ?? {},
-						} as any
-					}
-					validate={(values: any) => {
-						const errors: Record<string, string> = {};
-						const listenPortError = validateListenPorts(values.listenPort, values.sslForced);
-						if (listenPortError) {
-							errors.listenPort = listenPortError;
+											defaultForwardAuth.copyHeaders,
+									)
+										? (
+												initialData?.forwardAuth?.copyHeaders ??
+												data?.forwardAuth?.copyHeaders ??
+												defaultForwardAuth.copyHeaders
+											).join("\n")
+										: (initialData?.forwardAuth?.copyHeaders ??
+											data?.forwardAuth?.copyHeaders ??
+											""),
+								},
+								meta: initialData?.meta ?? data?.meta ?? {},
+							} as any
 						}
-						return errors;
-					}}
-					onSubmit={onSubmit}
-				>
-					{({ values }) => (
-						<Form>
-							<DirtySync dirtyRef={dirtyRef} />
-							<Modal.Header closeButton>
-								<Modal.Title>
-									<T
-										id={id !== "new" ? "object.edit" : "object.add"}
-										tData={{ object: "proxy-host" }}
-									/>
-								</Modal.Title>
-							</Modal.Header>
-							<Modal.Body className="p-0">
-								<Alert variant="danger" show={!!errorMsg} onClose={() => setErrorMsg(null)} dismissible>
-									{errorMsg}
-								</Alert>
-								<div className="card m-0 border-0">
-									<div className="card-header">
-										<ul className="nav nav-tabs card-header-tabs" data-bs-toggle="tabs">
-											<li className="nav-item" role="presentation">
-												<a
-													href="#tab-details"
-													className="nav-link active"
-													data-bs-toggle="tab"
-													aria-selected="true"
-													role="tab"
-												>
-													<T id="column.details" />
-												</a>
-											</li>
-											<li className="nav-item" role="presentation">
-												<a
-													href="#tab-locations"
-													className="nav-link"
-													data-bs-toggle="tab"
-													aria-selected="false"
-													tabIndex={-1}
-													role="tab"
-												>
-													<T id="column.custom-locations" />
-												</a>
-											</li>
-											<li className="nav-item" role="presentation">
-												<a
-													href="#tab-ssl"
-													className="nav-link"
-													data-bs-toggle="tab"
-													aria-selected="false"
-													tabIndex={-1}
-													role="tab"
-												>
-													<T id="column.ssl" />
-												</a>
-											</li>
-										</ul>
-									</div>
-									<div className="card-body">
-										<div className="tab-content">
-											<div className="tab-pane active show" id="tab-details" role="tabpanel">
-												<Field name="serviceName">
-													{({ field }: any) => (
-														<div className="mb-3">
-															<label className="form-label" htmlFor="serviceName">
-																服务名称
-															</label>
-															<input
-																id="serviceName"
-																type="text"
-																className="form-control"
-																placeholder="例如：AList / Home Assistant"
-																{...field}
-															/>
-														</div>
-													)}
-												</Field>
-												<DomainNamesField isWildcardPermitted dnsProviderWildcardSupported />
-												<Field name="listenPort">
-													{({ field, form }: any) => (
-														<div className="mb-3">
-															<label className="form-label" htmlFor="listenPort">
-																<T id="host.listen-port" />
-															</label>
-															<input
-																id="listenPort"
-																type="text"
-																className={`form-control ${form.errors.listenPort && form.touched.listenPort ? "is-invalid" : ""}`}
-																placeholder={values.sslForced ? "443,11111" : "80,8080"}
-																{...field}
-															/>
-															<small className="text-secondary">
-																<T id={values.sslForced ? "host.listen-port.help-ssl" : "host.listen-port.help-http"} />
-															</small>
-															{form.errors.listenPort ? (
-																<div className="invalid-feedback">
-																	{form.errors.listenPort && form.touched.listenPort
-																		? form.errors.listenPort
-																		: null}
-																</div>
-															) : null}
-														</div>
-													)}
-												</Field>
-												<h4 className="py-2">
-													<T id="load-balancing.upstreams" />
-												</h4>
-												<UpstreamsFields />
-												<AccessField />
-												<div className="my-3">
+						validate={(values: any) => {
+							const errors: Record<string, string> = {};
+							const listenPortError = validateListenPorts(values.listenPort, values.sslForced);
+							if (listenPortError) {
+								errors.listenPort = listenPortError;
+							}
+							return errors;
+						}}
+						onSubmit={onSubmit}
+					>
+						{({ values }) => (
+							<Form>
+								<DirtySync dirtyRef={dirtyRef} />
+								<Modal.Header closeButton>
+									<Modal.Title>
+										<T
+											id={id !== "new" ? "object.edit" : "object.add"}
+											tData={{ object: "proxy-host" }}
+										/>
+									</Modal.Title>
+								</Modal.Header>
+								<Modal.Body className="p-0">
+									<Alert
+										variant="danger"
+										show={!!errorMsg}
+										onClose={() => setErrorMsg(null)}
+										dismissible
+									>
+										{errorMsg}
+									</Alert>
+									<div className="card m-0 border-0">
+										<div className="card-header">
+											<ul className="nav nav-tabs card-header-tabs" data-bs-toggle="tabs">
+												<li className="nav-item" role="presentation">
+													<a
+														href="#tab-details"
+														className="nav-link active"
+														data-bs-toggle="tab"
+														aria-selected="true"
+														role="tab"
+													>
+														<T id="column.details" />
+													</a>
+												</li>
+												<li className="nav-item" role="presentation">
+													<a
+														href="#tab-locations"
+														className="nav-link"
+														data-bs-toggle="tab"
+														aria-selected="false"
+														tabIndex={-1}
+														role="tab"
+													>
+														<T id="column.custom-locations" />
+													</a>
+												</li>
+												<li className="nav-item" role="presentation">
+													<a
+														href="#tab-reverse-proxy"
+														className="nav-link"
+														data-bs-toggle="tab"
+														aria-selected="false"
+														tabIndex={-1}
+														role="tab"
+													>
+														反代高级
+													</a>
+												</li>
+												<li className="nav-item" role="presentation">
+													<a
+														href="#tab-ssl"
+														className="nav-link"
+														data-bs-toggle="tab"
+														aria-selected="false"
+														tabIndex={-1}
+														role="tab"
+													>
+														<T id="column.ssl" />
+													</a>
+												</li>
+											</ul>
+										</div>
+										<div className="card-body">
+											<div className="tab-content">
+												<div className="tab-pane active show" id="tab-details" role="tabpanel">
+													<Field name="serviceName">
+														{({ field }: any) => (
+															<div className="mb-3">
+																<label className="form-label" htmlFor="serviceName">
+																	服务名称
+																</label>
+																<input
+																	id="serviceName"
+																	type="text"
+																	className="form-control"
+																	placeholder="例如：AList / Home Assistant"
+																	{...field}
+																/>
+															</div>
+														)}
+													</Field>
+													<DomainNamesField
+														isWildcardPermitted
+														dnsProviderWildcardSupported
+													/>
+													<Field name="listenPort">
+														{({ field, form }: any) => (
+															<div className="mb-3">
+																<label className="form-label" htmlFor="listenPort">
+																	<T id="host.listen-port" />
+																</label>
+																<input
+																	id="listenPort"
+																	type="text"
+																	className={`form-control ${form.errors.listenPort && form.touched.listenPort ? "is-invalid" : ""}`}
+																	placeholder={
+																		values.sslForced ? "443,11111" : "80,8080"
+																	}
+																	{...field}
+																/>
+																<small className="text-secondary">
+																	<T
+																		id={
+																			values.sslForced
+																				? "host.listen-port.help-ssl"
+																				: "host.listen-port.help-http"
+																		}
+																	/>
+																</small>
+																{form.errors.listenPort ? (
+																	<div className="invalid-feedback">
+																		{form.errors.listenPort &&
+																		form.touched.listenPort
+																			? form.errors.listenPort
+																			: null}
+																	</div>
+																) : null}
+															</div>
+														)}
+													</Field>
 													<h4 className="py-2">
-														<T id="options" />
+														<T id="load-balancing.upstreams" />
 													</h4>
-													<div className="divide-y">
+													<UpstreamsFields />
+													<AccessField />
+													<div className="my-3">
+														<h4 className="py-2">
+															<T id="options" />
+														</h4>
+														<div className="divide-y">
 															<div>
-															<label className="row" htmlFor="upstreamInsecureSkipVerify">
-																<span className="col">
-																	<T id="host.flags.upstream-insecure-skip-verify" />
-																	<small className="d-block text-secondary">
-																		<T id="host.flags.upstream-insecure-skip-verify.help" />
-																	</small>
-																</span>
-																<span className="col-auto">
-																	<Field name="upstreamInsecureSkipVerify" type="checkbox">
-																		{({ field }: any) => (
-																			<label className="form-check form-check-single form-switch">
-																				<input
-																					{...field}
-																					id="upstreamInsecureSkipVerify"
-																					className={cn("form-check-input", {
-																						"bg-lime": field.checked,
-																					})}
-																					type="checkbox"
-																				/>
-																			</label>
-																		)}
-																	</Field>
-																</span>
-															</label>
-														</div>
-														<div>
-															<label className="row" htmlFor="forwardAuthEnabled">
-																<span className="col">
-																	<T id="forward-auth.toggle" />
-																</span>
-																<span className="col-auto">
-																	<Field name="forwardAuth.enabled" type="checkbox">
-																		{({ field }: any) => (
-																			<label className="form-check form-check-single form-switch">
-																				<input
-																					{...field}
-																					id="forwardAuthEnabled"
-																					className={cn("form-check-input", {
-																						"bg-lime": field.checked,
-																					})}
-																					type="checkbox"
-																				/>
-																			</label>
-																		)}
-																	</Field>
-																</span>
-															</label>
-															<ForwardAuthFields />
+																<label className="row" htmlFor="forwardAuthEnabled">
+																	<span className="col">
+																		<T id="forward-auth.toggle" />
+																	</span>
+																	<span className="col-auto">
+																		<Field
+																			name="forwardAuth.enabled"
+																			type="checkbox"
+																		>
+																			{({ field }: any) => (
+																				<label className="form-check form-check-single form-switch">
+																					<input
+																						{...field}
+																						id="forwardAuthEnabled"
+																						className={cn(
+																							"form-check-input",
+																							{
+																								"bg-lime":
+																									field.checked,
+																							},
+																						)}
+																						type="checkbox"
+																					/>
+																				</label>
+																			)}
+																		</Field>
+																	</span>
+																</label>
+																<ForwardAuthFields />
+															</div>
 														</div>
 													</div>
 												</div>
-											</div>
-											<div className="tab-pane" id="tab-locations" role="tabpanel">
-												<LocationsFields
-													initialValues={initialData?.locations ?? data?.locations ?? []}
-												/>
-											</div>
-											<div className="tab-pane" id="tab-ssl" role="tabpanel">
-												<DomainCertificateBindingsField />
-												<SSLOptionsFields color="bg-lime" forProxyHost={true} />
+												<div className="tab-pane" id="tab-locations" role="tabpanel">
+													<LocationsFields
+														initialValues={initialData?.locations ?? data?.locations ?? []}
+													/>
+												</div>
+												<div className="tab-pane" id="tab-reverse-proxy" role="tabpanel">
+													<ReverseProxyAdvancedPanel name="reverseProxy" />
+												</div>
+												<div className="tab-pane" id="tab-ssl" role="tabpanel">
+													<DomainCertificateBindingsField />
+													<SSLOptionsFields color="bg-lime" forProxyHost={true} />
+												</div>
 											</div>
 										</div>
 									</div>
-								</div>
-							</Modal.Body>
-							<Modal.Footer>
-								<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
-									<T id="cancel" />
-								</Button>
-								<Button
-									type="submit"
-									actionType="primary"
-									className="ms-auto bg-lime"
-									data-bs-dismiss="modal"
-									isLoading={isSubmitting}
-									disabled={isSubmitting}
-								>
-									<T id="save" />
-								</Button>
-							</Modal.Footer>
-						</Form>
-					)}
-				</Formik>
-			)}
-		</Modal>
-		<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
-	</>);
+								</Modal.Body>
+								<Modal.Footer>
+									<Button data-bs-dismiss="modal" onClick={handleClose} disabled={isSubmitting}>
+										<T id="cancel" />
+									</Button>
+									<Button
+										type="submit"
+										actionType="primary"
+										className="ms-auto bg-lime"
+										data-bs-dismiss="modal"
+										isLoading={isSubmitting}
+										disabled={isSubmitting}
+									>
+										<T id="save" />
+									</Button>
+								</Modal.Footer>
+							</Form>
+						)}
+					</Formik>
+				)}
+			</Modal>
+			<ConfirmDiscardModal show={showConfirm} onConfirm={handleConfirm} onCancel={handleCancel} />
+		</>
+	);
 });
 
 export { showProxyHostModal };

@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ProxyLocation } from "src/api/backend";
 import { T } from "src/locale";
 import styles from "./LocationsFields.module.css";
+import { ReverseProxyAdvancedPanel, withReverseProxyDefaults } from "./ReverseProxyAdvancedPanel";
 import { UpstreamsFields } from "./UpstreamsFields";
 
 interface Props {
@@ -61,6 +62,8 @@ export function LocationsFields({ initialValues, name = "locations" }: Props) {
 		forwardPath: "",
 		upstreams: [{ forwardScheme: "http", forwardHost: "", forwardPort: 80, weight: 1 }],
 		loadBalancingPolicy: "",
+		reverseProxyMode: "inherit",
+		reverseProxy: withReverseProxyDefaults(),
 	};
 
 	const setFormField = (newValues: ProxyLocation[]) => {
@@ -93,6 +96,23 @@ export function LocationsFields({ initialValues, name = "locations" }: Props) {
 			}
 			return next;
 		});
+	};
+
+	const handleReverseProxyModeChange = (idx: number, mode: string) => {
+		const nextMode: "inherit" | "custom" = mode === "custom" ? "custom" : "inherit";
+		const newValues = values.map((v: ProxyLocation, i: number) =>
+			i === idx
+				? {
+						...v,
+						reverseProxyMode: nextMode,
+						reverseProxy:
+							nextMode === "custom"
+								? withReverseProxyDefaults(v.reverseProxy)
+								: withReverseProxyDefaults(),
+					}
+				: v,
+		);
+		setFormField(newValues);
 	};
 
 	const err = (idx: number, field: string) => fieldErrors[idx]?.[field];
@@ -158,6 +178,29 @@ export function LocationsFields({ initialValues, name = "locations" }: Props) {
 									)}
 								</div>
 							</div>
+						</div>
+						<div className="border-top pt-3">
+							<div className="mb-3">
+								<label className="form-label" htmlFor={`${name}-${idx}-reverse-proxy-mode`}>
+									反代高级
+								</label>
+								<select
+									id={`${name}-${idx}-reverse-proxy-mode`}
+									className="form-control"
+									value={item.reverseProxyMode === "custom" ? "custom" : "inherit"}
+									onChange={(e) => handleReverseProxyModeChange(idx, e.target.value)}
+								>
+									<option value="inherit">继承站点级配置</option>
+									<option value="custom">自定义当前路径</option>
+								</select>
+							</div>
+							{item.reverseProxyMode === "custom" ? (
+								<ReverseProxyAdvancedPanel
+									name={`${name}.${idx}.reverseProxy`}
+									compact
+									inheritNote="当前路径会覆盖站点级反代高级配置。未填写的项按 Caddy 默认值处理。"
+								/>
+							) : null}
 						</div>
 						<div className="mt-1">
 							<a

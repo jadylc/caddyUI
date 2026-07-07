@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -118,14 +119,16 @@ type IssuerConfig struct {
 
 // ProxyLocation 反代路径规则，允许同一站点下多个路径指向不同后端。
 type ProxyLocation struct {
-	Path                string          `json:"path"`
-	ForwardScheme       string          `json:"forward_scheme,omitempty"`
-	ForwardHost         string          `json:"forward_host"`
-	ForwardPort         int             `json:"forward_port"`
-	ForwardPath         string          `json:"forward_path,omitempty"` // 目标路径重写，如 /B 表示 /A → /B
-	Backend             string          `json:"backend,omitempty"`      // 计算字段: scheme://host:port[/path]
-	Upstreams           []ProxyUpstream `json:"upstreams,omitempty"`
-	LoadBalancingPolicy string          `json:"load_balancing_policy,omitempty"`
+	Path                string                     `json:"path"`
+	ForwardScheme       string                     `json:"forward_scheme,omitempty"`
+	ForwardHost         string                     `json:"forward_host"`
+	ForwardPort         int                        `json:"forward_port"`
+	ForwardPath         string                     `json:"forward_path,omitempty"` // 目标路径重写，如 /B 表示 /A → /B
+	Backend             string                     `json:"backend,omitempty"`      // 计算字段: scheme://host:port[/path]
+	Upstreams           []ProxyUpstream            `json:"upstreams,omitempty"`
+	LoadBalancingPolicy string                     `json:"load_balancing_policy,omitempty"`
+	ReverseProxyMode    string                     `json:"reverse_proxy_mode,omitempty"` // inherit | custom
+	ReverseProxy        ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
 }
 
 type ProxyUpstream struct {
@@ -138,39 +141,90 @@ type ProxyUpstream struct {
 
 // Site 反代条目。
 type Site struct {
-	CreatedOn                  string               `json:"created_on,omitempty"`
-	ModifiedOn                 string               `json:"modified_on,omitempty"`
-	Name                       string               `json:"name"`
-	ServiceName                string               `json:"service_name,omitempty"`
-	Kind                       string               `json:"kind,omitempty"` // proxy | redirection | dead
-	Domain                     string               `json:"domain"`
-	Path                       string               `json:"path,omitempty"`
-	Backend                    string               `json:"backend"`
-	Upstreams                  []ProxyUpstream      `json:"upstreams,omitempty"`
-	LoadBalancingPolicy        string               `json:"load_balancing_policy,omitempty"`
-	Locations                  []ProxyLocation      `json:"locations,omitempty"`
-	RedirectURL                string               `json:"redirect_url,omitempty"`
-	RedirectCode               int                  `json:"redirect_code,omitempty"`
-	PreservePath               bool                 `json:"preserve_path,omitempty"`
-	Headers                    string               `json:"headers,omitempty"`
-	AccessListID               int                  `json:"access_list_id,omitempty"`
-	Wildcard                   bool                 `json:"wildcard,omitempty"`
-	NoTLS                      bool                 `json:"no_tls,omitempty"`           // true = 仅 HTTP，不申请证书
-	ChallengePref              string               `json:"challenge_pref,omitempty"`   // "http" | "dns"，默认 http
-	CredentialID               string               `json:"credential_id,omitempty"`    // DNS-01 或 wildcard 必填
-	CertificateMode            string               `json:"certificate_mode,omitempty"` // auto = 由 Caddy 为每个域名自动管理证书
-	CertificateBindings        []CertificateBinding `json:"certificate_bindings,omitempty"`
-	Issuer                     IssuerConfig         `json:"issuer,omitempty"`
-	CustomCertFile             string               `json:"custom_cert_file,omitempty"`
-	CustomKeyFile              string               `json:"custom_key_file,omitempty"`
-	ForwardAuth                ForwardAuthConfig    `json:"forward_auth,omitempty"`
-	HSTSEnabled                bool                 `json:"hsts_enabled,omitempty"`
-	HSTSSubdomains             bool                 `json:"hsts_subdomains,omitempty"`
-	TrustForwardedProto        bool                 `json:"trust_forwarded_proto,omitempty"`
-	UpstreamInsecureSkipVerify bool                 `json:"upstream_insecure_skip_verify,omitempty"`
-	Disabled                   bool                 `json:"disabled,omitempty"`
-	LastError                  string               `json:"last_error,omitempty"`
-	LastErrorAt                time.Time            `json:"last_error_at,omitempty"`
+	CreatedOn                  string                     `json:"created_on,omitempty"`
+	ModifiedOn                 string                     `json:"modified_on,omitempty"`
+	Name                       string                     `json:"name"`
+	ServiceName                string                     `json:"service_name,omitempty"`
+	Kind                       string                     `json:"kind,omitempty"` // proxy | redirection | dead
+	Domain                     string                     `json:"domain"`
+	Path                       string                     `json:"path,omitempty"`
+	Backend                    string                     `json:"backend"`
+	Upstreams                  []ProxyUpstream            `json:"upstreams,omitempty"`
+	LoadBalancingPolicy        string                     `json:"load_balancing_policy,omitempty"`
+	Locations                  []ProxyLocation            `json:"locations,omitempty"`
+	RedirectURL                string                     `json:"redirect_url,omitempty"`
+	RedirectCode               int                        `json:"redirect_code,omitempty"`
+	PreservePath               bool                       `json:"preserve_path,omitempty"`
+	Headers                    string                     `json:"headers,omitempty"`
+	AccessListID               int                        `json:"access_list_id,omitempty"`
+	Wildcard                   bool                       `json:"wildcard,omitempty"`
+	NoTLS                      bool                       `json:"no_tls,omitempty"`           // true = 仅 HTTP，不申请证书
+	ChallengePref              string                     `json:"challenge_pref,omitempty"`   // "http" | "dns"，默认 http
+	CredentialID               string                     `json:"credential_id,omitempty"`    // DNS-01 或 wildcard 必填
+	CertificateMode            string                     `json:"certificate_mode,omitempty"` // auto = 由 Caddy 为每个域名自动管理证书
+	CertificateBindings        []CertificateBinding       `json:"certificate_bindings,omitempty"`
+	Issuer                     IssuerConfig               `json:"issuer,omitempty"`
+	CustomCertFile             string                     `json:"custom_cert_file,omitempty"`
+	CustomKeyFile              string                     `json:"custom_key_file,omitempty"`
+	ForwardAuth                ForwardAuthConfig          `json:"forward_auth,omitempty"`
+	HSTSEnabled                bool                       `json:"hsts_enabled,omitempty"`
+	HSTSSubdomains             bool                       `json:"hsts_subdomains,omitempty"`
+	TrustForwardedProto        bool                       `json:"trust_forwarded_proto,omitempty"`
+	UpstreamInsecureSkipVerify bool                       `json:"upstream_insecure_skip_verify,omitempty"`
+	ReverseProxy               ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
+	Disabled                   bool                       `json:"disabled,omitempty"`
+	LastError                  string                     `json:"last_error,omitempty"`
+	LastErrorAt                time.Time                  `json:"last_error_at,omitempty"`
+}
+
+type ReverseProxyAdvancedConfig struct {
+	HealthCheck ReverseProxyHealthCheckConfig `json:"health_check,omitempty"`
+	Retry       ReverseProxyRetryConfig       `json:"retry,omitempty"`
+	Headers     ReverseProxyHeadersConfig     `json:"headers,omitempty"`
+	Transport   ReverseProxyTransportConfig   `json:"transport,omitempty"`
+}
+
+type ReverseProxyHealthCheckConfig struct {
+	Enabled         bool   `json:"enabled,omitempty"`
+	URI             string `json:"uri,omitempty"`
+	Interval        string `json:"interval,omitempty"`
+	Timeout         string `json:"timeout,omitempty"`
+	Status          string `json:"status,omitempty"`
+	PassiveEnabled  bool   `json:"passive_enabled,omitempty"`
+	FailDuration    string `json:"fail_duration,omitempty"`
+	MaxFails        int    `json:"max_fails,omitempty"`
+	UnhealthyStatus string `json:"unhealthy_status,omitempty"`
+}
+
+type ReverseProxyRetryConfig struct {
+	Enabled     bool   `json:"enabled,omitempty"`
+	TryDuration string `json:"try_duration,omitempty"`
+	TryInterval string `json:"try_interval,omitempty"`
+	Retries     int    `json:"retries,omitempty"`
+	Methods     string `json:"methods,omitempty"`
+}
+
+type ProxyHeaderRule struct {
+	Action string `json:"action,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Value  string `json:"value,omitempty"`
+}
+
+type ReverseProxyHeadersConfig struct {
+	HostMode  string            `json:"host_mode,omitempty"`
+	HostValue string            `json:"host_value,omitempty"`
+	Request   []ProxyHeaderRule `json:"request,omitempty"`
+	Response  []ProxyHeaderRule `json:"response,omitempty"`
+}
+
+type ReverseProxyTransportConfig struct {
+	Protocol              string `json:"protocol,omitempty"`
+	TLSServerName         string `json:"tls_server_name,omitempty"`
+	TLSInsecureSkipVerify bool   `json:"tls_insecure_skip_verify,omitempty"`
+	DialTimeout           string `json:"dial_timeout,omitempty"`
+	ResponseHeaderTimeout string `json:"response_header_timeout,omitempty"`
+	ReadTimeout           string `json:"read_timeout,omitempty"`
+	WriteTimeout          string `json:"write_timeout,omitempty"`
 }
 
 type ForwardAuthConfig struct {
@@ -244,6 +298,7 @@ var forwardAuthProviderSpecs = map[string]forwardAuthProviderSpec{
 }
 
 var headerNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var reverseProxyStatusRe = regexp.MustCompile(`^[1-5][0-9]{2}$`)
 
 type CertificateBinding struct {
 	Domain            string       `json:"domain"`
@@ -1119,7 +1174,7 @@ func credentialItemHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := reloadCaddy(); err != nil {
+		if err := validateAndReloadCaddy(); err != nil {
 			restoreBackups(backups)
 			http.Error(w, "reload failed: "+err.Error(), http.StatusBadRequest)
 			return
@@ -1147,7 +1202,7 @@ func credentialItemHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := reloadCaddy(); err != nil {
+		if err := validateAndReloadCaddy(); err != nil {
 			restoreBackups(backups)
 			http.Error(w, "reload failed: "+err.Error(), http.StatusBadRequest)
 			return
@@ -1364,7 +1419,7 @@ func putSite(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		restoreBackups(backups)
 		rollbackSite()
 		http.Error(w, "reload failed: "+err.Error(), http.StatusBadRequest)
@@ -1396,7 +1451,7 @@ func deleteSite(w http.ResponseWriter, name string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		restoreBackups(backups)
 		rollback(confPath, oldConf)
 		rollback(metaPath, oldMeta)
@@ -2283,7 +2338,11 @@ func writeLocationReverseProxy(b *strings.Builder, s Site, loc ProxyLocation, in
 		}
 	}
 
-	writeUpstreamsReverseProxyBlock(b, loc.Upstreams, defaultString(loc.LoadBalancingPolicy, s.LoadBalancingPolicy), backend, s.UpstreamInsecureSkipVerify, true, indent)
+	advanced := s.ReverseProxy
+	if loc.ReverseProxyMode == "custom" {
+		advanced = loc.ReverseProxy
+	}
+	writeUpstreamsReverseProxyBlock(b, loc.Upstreams, defaultString(loc.LoadBalancingPolicy, s.LoadBalancingPolicy), backend, advanced, s.UpstreamInsecureSkipVerify, true, indent)
 	return nil
 }
 
@@ -2569,20 +2628,21 @@ func accessBasicAuthPasswordHash(password string) (string, error) {
 }
 
 func writeReverseProxyBlock(b *strings.Builder, backend string, _ string, upstreamInsecureSkipVerify bool, indent string) {
-	writeUpstreamsReverseProxyBlock(b, nil, "", backend, upstreamInsecureSkipVerify, false, indent)
+	writeUpstreamsReverseProxyBlock(b, nil, "", backend, ReverseProxyAdvancedConfig{}, upstreamInsecureSkipVerify, false, indent)
 }
 
 func writeSiteReverseProxyBlock(b *strings.Builder, s Site, indent string) {
-	writeUpstreamsReverseProxyBlock(b, s.Upstreams, s.LoadBalancingPolicy, s.Backend, s.UpstreamInsecureSkipVerify, false, indent)
+	writeUpstreamsReverseProxyBlock(b, s.Upstreams, s.LoadBalancingPolicy, s.Backend, s.ReverseProxy, s.UpstreamInsecureSkipVerify, false, indent)
 }
 
-func writeUpstreamsReverseProxyBlock(b *strings.Builder, upstreams []ProxyUpstream, policy string, fallbackBackend string, upstreamInsecureSkipVerify bool, forceHostHeader bool, indent string) {
+func writeUpstreamsReverseProxyBlock(b *strings.Builder, upstreams []ProxyUpstream, policy string, fallbackBackend string, advanced ReverseProxyAdvancedConfig, upstreamInsecureSkipVerify bool, forceHostHeader bool, indent string) {
 	targets := normalizeProxyUpstreams(upstreams, fallbackBackend)
 	if len(targets) == 0 {
 		return
 	}
 	args := proxyUpstreamArgs(targets)
-	needsBlock := reverseProxyNeedsBlock(targets, policy, upstreamInsecureSkipVerify, forceHostHeader)
+	advanced = normalizeReverseProxyAdvancedConfig(advanced)
+	needsBlock := reverseProxyNeedsBlock(targets, policy, advanced, upstreamInsecureSkipVerify, forceHostHeader)
 	if !needsBlock {
 		fmt.Fprintf(b, "%sreverse_proxy %s\n", indent, strings.Join(args, " "))
 		return
@@ -2591,18 +2651,17 @@ func writeUpstreamsReverseProxyBlock(b *strings.Builder, upstreams []ProxyUpstre
 	if policyLine := proxyLoadBalancingPolicyLine(policy, targets); policyLine != "" {
 		fmt.Fprintf(b, "%s    lb_policy %s\n", indent, policyLine)
 	}
-	if upstreamInsecureSkipVerify && upstreamsNeedInsecureSkipVerify(targets) {
-		fmt.Fprintf(b, "%s    transport http {\n", indent)
-		fmt.Fprintf(b, "%s        tls_insecure_skip_verify\n", indent)
-		fmt.Fprintf(b, "%s    }\n", indent)
-	}
+	writeReverseProxyHealthCheckDirectives(b, advanced.HealthCheck, indent+"    ")
+	writeReverseProxyRetryDirectives(b, advanced.Retry, indent+"    ")
+	forcedHostHeader := ""
 	if forceHostHeader {
-		hostHeader := "{upstream_hostport}"
+		forcedHostHeader = "{upstream_hostport}"
 		if len(targets) == 1 {
-			hostHeader = proxyUpstreamHostPort(targets[0].Backend)
+			forcedHostHeader = proxyUpstreamHostPort(targets[0].Backend)
 		}
-		fmt.Fprintf(b, "%s    header_up Host %s\n", indent, hostHeader)
 	}
+	writeReverseProxyHeaderDirectives(b, advanced.Headers, forcedHostHeader, indent+"    ")
+	writeReverseProxyTransportBlock(b, targets, advanced.Transport, upstreamInsecureSkipVerify, indent+"    ")
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
@@ -2671,17 +2730,231 @@ func proxyUpstreamArgs(upstreams []ProxyUpstream) []string {
 	return out
 }
 
-func reverseProxyNeedsBlock(upstreams []ProxyUpstream, policy string, upstreamInsecureSkipVerify bool, forceHostHeader bool) bool {
+func reverseProxyNeedsBlock(upstreams []ProxyUpstream, policy string, advanced ReverseProxyAdvancedConfig, upstreamInsecureSkipVerify bool, forceHostHeader bool) bool {
 	if proxyLoadBalancingPolicyLine(policy, upstreams) != "" {
 		return true
 	}
-	if upstreamInsecureSkipVerify && upstreamsNeedInsecureSkipVerify(upstreams) {
+	if reverseProxyAdvancedNeedsBlock(advanced) {
+		return true
+	}
+	if reverseProxyTransportNeedsBlock(upstreams, advanced.Transport, upstreamInsecureSkipVerify) {
 		return true
 	}
 	if forceHostHeader {
 		return true
 	}
 	return false
+}
+
+func normalizeReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig) ReverseProxyAdvancedConfig {
+	cfg.HealthCheck.URI = strings.TrimSpace(cfg.HealthCheck.URI)
+	cfg.HealthCheck.Interval = strings.TrimSpace(cfg.HealthCheck.Interval)
+	cfg.HealthCheck.Timeout = strings.TrimSpace(cfg.HealthCheck.Timeout)
+	cfg.HealthCheck.Status = strings.TrimSpace(cfg.HealthCheck.Status)
+	cfg.HealthCheck.FailDuration = strings.TrimSpace(cfg.HealthCheck.FailDuration)
+	cfg.HealthCheck.UnhealthyStatus = strings.TrimSpace(cfg.HealthCheck.UnhealthyStatus)
+	if cfg.HealthCheck.MaxFails < 0 {
+		cfg.HealthCheck.MaxFails = 0
+	}
+	cfg.Retry.TryDuration = strings.TrimSpace(cfg.Retry.TryDuration)
+	cfg.Retry.TryInterval = strings.TrimSpace(cfg.Retry.TryInterval)
+	if cfg.Retry.Retries < 0 {
+		cfg.Retry.Retries = 0
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Retry.Methods)) {
+	case "get_head":
+		cfg.Retry.Methods = "get_head"
+	default:
+		cfg.Retry.Methods = ""
+	}
+	cfg.Headers.HostMode = strings.ToLower(strings.TrimSpace(cfg.Headers.HostMode))
+	cfg.Headers.HostValue = strings.TrimSpace(cfg.Headers.HostValue)
+	switch cfg.Headers.HostMode {
+	case "host", "upstream", "custom":
+	default:
+		cfg.Headers.HostMode = ""
+		cfg.Headers.HostValue = ""
+	}
+	cfg.Headers.Request = normalizeProxyHeaderRules(cfg.Headers.Request)
+	cfg.Headers.Response = normalizeProxyHeaderRules(cfg.Headers.Response)
+	cfg.Transport.Protocol = strings.ToLower(strings.TrimSpace(cfg.Transport.Protocol))
+	switch cfg.Transport.Protocol {
+	case "h2c", "http1":
+	default:
+		cfg.Transport.Protocol = ""
+	}
+	cfg.Transport.TLSServerName = strings.TrimSpace(cfg.Transport.TLSServerName)
+	cfg.Transport.DialTimeout = strings.TrimSpace(cfg.Transport.DialTimeout)
+	cfg.Transport.ResponseHeaderTimeout = strings.TrimSpace(cfg.Transport.ResponseHeaderTimeout)
+	cfg.Transport.ReadTimeout = strings.TrimSpace(cfg.Transport.ReadTimeout)
+	cfg.Transport.WriteTimeout = strings.TrimSpace(cfg.Transport.WriteTimeout)
+	return cfg
+}
+
+func effectiveReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig, legacyInsecureSkipVerify bool) ReverseProxyAdvancedConfig {
+	cfg = normalizeReverseProxyAdvancedConfig(cfg)
+	if legacyInsecureSkipVerify {
+		cfg.Transport.TLSInsecureSkipVerify = true
+	}
+	return cfg
+}
+
+func normalizeProxyHeaderRules(rules []ProxyHeaderRule) []ProxyHeaderRule {
+	out := make([]ProxyHeaderRule, 0, len(rules))
+	for _, rule := range rules {
+		action := strings.ToLower(strings.TrimSpace(rule.Action))
+		if action != "delete" {
+			action = "set"
+		}
+		name := strings.TrimSpace(rule.Name)
+		value := strings.TrimSpace(rule.Value)
+		if name == "" {
+			continue
+		}
+		if action == "delete" {
+			value = ""
+		}
+		out = append(out, ProxyHeaderRule{Action: action, Name: name, Value: value})
+	}
+	return out
+}
+
+func reverseProxyAdvancedNeedsBlock(cfg ReverseProxyAdvancedConfig) bool {
+	hc := cfg.HealthCheck
+	if hc.Enabled && (hc.URI != "" || hc.Interval != "" || hc.Timeout != "" || hc.Status != "") {
+		return true
+	}
+	if hc.PassiveEnabled && (hc.FailDuration != "" || hc.MaxFails > 0 || hc.UnhealthyStatus != "") {
+		return true
+	}
+	retry := cfg.Retry
+	if retry.Enabled && (retry.TryDuration != "" || retry.TryInterval != "" || retry.Retries > 0 || retry.Methods != "") {
+		return true
+	}
+	headers := cfg.Headers
+	if headers.HostMode != "" || len(headers.Request) > 0 || len(headers.Response) > 0 {
+		return true
+	}
+	return false
+}
+
+func reverseProxyTransportNeedsBlock(upstreams []ProxyUpstream, cfg ReverseProxyTransportConfig, legacyInsecureSkipVerify bool) bool {
+	if cfg.Protocol != "" || cfg.TLSServerName != "" || cfg.DialTimeout != "" || cfg.ResponseHeaderTimeout != "" || cfg.ReadTimeout != "" || cfg.WriteTimeout != "" {
+		return true
+	}
+	if (cfg.TLSInsecureSkipVerify || legacyInsecureSkipVerify) && upstreamsNeedInsecureSkipVerify(upstreams) {
+		return true
+	}
+	return false
+}
+
+func writeReverseProxyHealthCheckDirectives(b *strings.Builder, cfg ReverseProxyHealthCheckConfig, indent string) {
+	if cfg.Enabled {
+		if cfg.URI != "" {
+			fmt.Fprintf(b, "%shealth_uri %s\n", indent, cfg.URI)
+		}
+		if cfg.Interval != "" {
+			fmt.Fprintf(b, "%shealth_interval %s\n", indent, cfg.Interval)
+		}
+		if cfg.Timeout != "" {
+			fmt.Fprintf(b, "%shealth_timeout %s\n", indent, cfg.Timeout)
+		}
+		if cfg.Status != "" {
+			fmt.Fprintf(b, "%shealth_status %s\n", indent, cfg.Status)
+		}
+	}
+	if cfg.PassiveEnabled {
+		if cfg.FailDuration != "" {
+			fmt.Fprintf(b, "%sfail_duration %s\n", indent, cfg.FailDuration)
+		}
+		if cfg.MaxFails > 0 {
+			fmt.Fprintf(b, "%smax_fails %d\n", indent, cfg.MaxFails)
+		}
+		if cfg.UnhealthyStatus != "" {
+			fmt.Fprintf(b, "%sunhealthy_status %s\n", indent, cfg.UnhealthyStatus)
+		}
+	}
+}
+
+func writeReverseProxyRetryDirectives(b *strings.Builder, cfg ReverseProxyRetryConfig, indent string) {
+	if !cfg.Enabled {
+		return
+	}
+	if cfg.TryDuration != "" {
+		fmt.Fprintf(b, "%slb_try_duration %s\n", indent, cfg.TryDuration)
+	}
+	if cfg.TryInterval != "" {
+		fmt.Fprintf(b, "%slb_try_interval %s\n", indent, cfg.TryInterval)
+	}
+	if cfg.Retries > 0 {
+		fmt.Fprintf(b, "%slb_retries %d\n", indent, cfg.Retries)
+	}
+	if cfg.Methods == "get_head" {
+		fmt.Fprintf(b, "%slb_retry_match method GET HEAD\n", indent)
+	}
+}
+
+func writeReverseProxyHeaderDirectives(b *strings.Builder, cfg ReverseProxyHeadersConfig, forcedHostHeader string, indent string) {
+	if cfg.HostMode != "" {
+		switch cfg.HostMode {
+		case "host":
+			fmt.Fprintf(b, "%sheader_up Host {host}\n", indent)
+		case "upstream":
+			fmt.Fprintf(b, "%sheader_up Host {upstream_hostport}\n", indent)
+		case "custom":
+			if cfg.HostValue != "" {
+				fmt.Fprintf(b, "%sheader_up Host %s\n", indent, caddyQuote(cfg.HostValue))
+			}
+		}
+	} else if forcedHostHeader != "" {
+		fmt.Fprintf(b, "%sheader_up Host %s\n", indent, forcedHostHeader)
+	}
+	for _, rule := range cfg.Request {
+		writeProxyHeaderRule(b, "header_up", rule, indent)
+	}
+	for _, rule := range cfg.Response {
+		writeProxyHeaderRule(b, "header_down", rule, indent)
+	}
+}
+
+func writeProxyHeaderRule(b *strings.Builder, directive string, rule ProxyHeaderRule, indent string) {
+	if rule.Action == "delete" {
+		fmt.Fprintf(b, "%s%s -%s\n", indent, directive, rule.Name)
+		return
+	}
+	fmt.Fprintf(b, "%s%s %s %s\n", indent, directive, rule.Name, caddyQuote(rule.Value))
+}
+
+func writeReverseProxyTransportBlock(b *strings.Builder, upstreams []ProxyUpstream, cfg ReverseProxyTransportConfig, legacyInsecureSkipVerify bool, indent string) {
+	if !reverseProxyTransportNeedsBlock(upstreams, cfg, legacyInsecureSkipVerify) {
+		return
+	}
+	fmt.Fprintf(b, "%stransport http {\n", indent)
+	switch cfg.Protocol {
+	case "h2c":
+		fmt.Fprintf(b, "%s    versions h2c 2\n", indent)
+	case "http1":
+		fmt.Fprintf(b, "%s    versions 1.1\n", indent)
+	}
+	if cfg.TLSServerName != "" {
+		fmt.Fprintf(b, "%s    tls_server_name %s\n", indent, caddyQuote(cfg.TLSServerName))
+	}
+	if (cfg.TLSInsecureSkipVerify || legacyInsecureSkipVerify) && upstreamsNeedInsecureSkipVerify(upstreams) {
+		fmt.Fprintf(b, "%s    tls_insecure_skip_verify\n", indent)
+	}
+	if cfg.DialTimeout != "" {
+		fmt.Fprintf(b, "%s    dial_timeout %s\n", indent, cfg.DialTimeout)
+	}
+	if cfg.ResponseHeaderTimeout != "" {
+		fmt.Fprintf(b, "%s    response_header_timeout %s\n", indent, cfg.ResponseHeaderTimeout)
+	}
+	if cfg.ReadTimeout != "" {
+		fmt.Fprintf(b, "%s    read_timeout %s\n", indent, cfg.ReadTimeout)
+	}
+	if cfg.WriteTimeout != "" {
+		fmt.Fprintf(b, "%s    write_timeout %s\n", indent, cfg.WriteTimeout)
+	}
+	fmt.Fprintf(b, "%s}\n", indent)
 }
 
 func upstreamsNeedInsecureSkipVerify(upstreams []ProxyUpstream) bool {
@@ -2736,6 +3009,7 @@ func normalizeSiteProxyConfig(s *Site) {
 	if s == nil {
 		return
 	}
+	s.ReverseProxy = normalizeReverseProxyAdvancedConfig(s.ReverseProxy)
 	s.Upstreams = normalizeProxyUpstreams(s.Upstreams, s.Backend)
 	if len(s.Upstreams) > 0 {
 		s.Backend = s.Upstreams[0].Backend
@@ -2757,6 +3031,13 @@ func normalizeSiteProxyConfig(s *Site) {
 			}
 		}
 		loc.LoadBalancingPolicy = normalizeLoadBalancingPolicy(loc.LoadBalancingPolicy)
+		loc.ReverseProxyMode = strings.ToLower(strings.TrimSpace(loc.ReverseProxyMode))
+		if loc.ReverseProxyMode != "custom" {
+			loc.ReverseProxyMode = "inherit"
+			loc.ReverseProxy = ReverseProxyAdvancedConfig{}
+		} else {
+			loc.ReverseProxy = normalizeReverseProxyAdvancedConfig(loc.ReverseProxy)
+		}
 	}
 }
 
@@ -2774,6 +3055,9 @@ func validateSiteProxyConfig(s Site) error {
 	if err := validateProxyUpstreams(normalizeProxyUpstreams(s.Upstreams, s.Backend), s.LoadBalancingPolicy, "默认上游"); err != nil {
 		return err
 	}
+	if err := validateReverseProxyAdvancedConfig(s.ReverseProxy, "默认反代高级"); err != nil {
+		return err
+	}
 	for _, loc := range s.Locations {
 		label := "路径规则"
 		if strings.TrimSpace(loc.Path) != "" {
@@ -2786,8 +3070,163 @@ func validateSiteProxyConfig(s Site) error {
 		if err := validateProxyUpstreams(normalizeProxyUpstreams(loc.Upstreams, fallback), loc.LoadBalancingPolicy, label); err != nil {
 			return err
 		}
+		mode := strings.ToLower(strings.TrimSpace(loc.ReverseProxyMode))
+		if mode != "" && mode != "inherit" && mode != "custom" {
+			return fmt.Errorf("%s 的反代高级模式无效", label)
+		}
+		if mode == "custom" {
+			if err := validateReverseProxyAdvancedConfig(loc.ReverseProxy, label+" 反代高级"); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func validateReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig, label string) error {
+	rawRetryMethods := strings.ToLower(strings.TrimSpace(cfg.Retry.Methods))
+	if rawRetryMethods != "" && rawRetryMethods != "get_head" {
+		return fmt.Errorf("%s 重试方法无效", label)
+	}
+	rawHostMode := strings.ToLower(strings.TrimSpace(cfg.Headers.HostMode))
+	if rawHostMode != "" && rawHostMode != "host" && rawHostMode != "upstream" && rawHostMode != "custom" {
+		return fmt.Errorf("%s Host 头策略无效", label)
+	}
+	rawProtocol := strings.ToLower(strings.TrimSpace(cfg.Transport.Protocol))
+	if rawProtocol != "" && rawProtocol != "h2c" && rawProtocol != "http1" {
+		return fmt.Errorf("%s Transport 协议无效", label)
+	}
+	if cfg.HealthCheck.MaxFails < 0 {
+		return fmt.Errorf("%s 最大失败次数不能小于 0", label)
+	}
+	if cfg.Retry.Retries < 0 {
+		return fmt.Errorf("%s 重试次数不能小于 0", label)
+	}
+	cfg = normalizeReverseProxyAdvancedConfig(cfg)
+	hc := cfg.HealthCheck
+	if hc.Enabled {
+		if hc.URI == "" {
+			return fmt.Errorf("%s 启用主动健康检查时必须填写检查路径", label)
+		}
+		if hc.URI != "" && (!strings.HasPrefix(hc.URI, "/") || hasControlChars(hc.URI)) {
+			return fmt.Errorf("%s 的健康检查路径必须以 / 开头且不能包含控制字符", label)
+		}
+		if err := validateOptionalCaddyDuration(hc.Interval, label+" 健康检查间隔"); err != nil {
+			return err
+		}
+		if err := validateOptionalCaddyDuration(hc.Timeout, label+" 健康检查超时"); err != nil {
+			return err
+		}
+		if err := validateOptionalReverseProxyStatus(hc.Status, label+" 健康检查状态码"); err != nil {
+			return err
+		}
+	}
+	if hc.PassiveEnabled {
+		if hc.FailDuration == "" {
+			return fmt.Errorf("%s 启用被动健康检查时必须填写失败窗口", label)
+		}
+		if err := validateOptionalCaddyDuration(hc.FailDuration, label+" 被动失败窗口"); err != nil {
+			return err
+		}
+		if err := validateOptionalReverseProxyStatus(hc.UnhealthyStatus, label+" 被动失败状态码"); err != nil {
+			return err
+		}
+	}
+	retry := cfg.Retry
+	if retry.Enabled {
+		if err := validateOptionalCaddyDuration(retry.TryDuration, label+" 重试总时长"); err != nil {
+			return err
+		}
+		if err := validateOptionalCaddyDuration(retry.TryInterval, label+" 重试间隔"); err != nil {
+			return err
+		}
+	}
+	headers := cfg.Headers
+	if headers.HostValue != "" && hasControlChars(headers.HostValue) {
+		return fmt.Errorf("%s 自定义 Host 不能包含控制字符", label)
+	}
+	if headers.HostMode == "custom" && strings.TrimSpace(headers.HostValue) == "" {
+		return fmt.Errorf("%s 自定义 Host 不能为空", label)
+	}
+	if err := validateProxyHeaderRules(headers.Request, label+" 请求头"); err != nil {
+		return err
+	}
+	if err := validateProxyHeaderRules(headers.Response, label+" 响应头"); err != nil {
+		return err
+	}
+	transport := cfg.Transport
+	if transport.TLSServerName != "" && hasControlChars(transport.TLSServerName) {
+		return fmt.Errorf("%s TLS Server Name 不能包含控制字符", label)
+	}
+	for _, item := range []struct {
+		value string
+		name  string
+	}{
+		{transport.DialTimeout, "连接超时"},
+		{transport.ResponseHeaderTimeout, "响应头超时"},
+		{transport.ReadTimeout, "读超时"},
+		{transport.WriteTimeout, "写超时"},
+	} {
+		if err := validateOptionalCaddyDuration(item.value, label+" "+item.name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOptionalCaddyDuration(value string, label string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if hasControlChars(value) {
+		return fmt.Errorf("%s 不能包含控制字符", label)
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("%s 必须是有效时长，例如 250ms、5s、1m", label)
+	}
+	return nil
+}
+
+func validateOptionalReverseProxyStatus(value string, label string) error {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return nil
+	}
+	if !reverseProxyStatusRe.MatchString(value) {
+		return fmt.Errorf("%s 必须是三位 HTTP 状态码，例如 200、204、503", label)
+	}
+	return nil
+}
+
+func validateProxyHeaderRules(rules []ProxyHeaderRule, label string) error {
+	for _, rawRule := range rules {
+		action := strings.ToLower(strings.TrimSpace(rawRule.Action))
+		if action != "" && action != "set" && action != "delete" {
+			return fmt.Errorf("%s %s 操作无效", label, strings.TrimSpace(rawRule.Name))
+		}
+		name := strings.TrimSpace(rawRule.Name)
+		if name == "" {
+			continue
+		}
+		if !headerNameRe.MatchString(name) {
+			return fmt.Errorf("%s %s 名称无效", label, name)
+		}
+		if hasControlChars(rawRule.Value) {
+			return fmt.Errorf("%s %s 值不能包含控制字符", label, name)
+		}
+	}
+	return nil
+}
+
+func hasControlChars(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func validateProxyUpstreams(upstreams []ProxyUpstream, policy string, label string) error {
@@ -4352,7 +4791,7 @@ func certReissueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 触发 Caddy 重新加载，让自动 HTTPS 引擎重新评估
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		http.Error(w, "reload failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -4546,11 +4985,33 @@ func reloadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+var validateCaddyConfigExec = validateCaddyConfig
+
+func validateAndReloadCaddy() error {
+	if err := validateCaddyConfigExec(); err != nil {
+		return err
+	}
+	return reloadCaddy()
+}
+
+func validateCaddyConfig() error {
+	cmd := exec.Command("caddy", "validate", "--config", caddyfile, "--adapter", "caddyfile")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(out))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("caddy validate failed: %s", message)
+	}
+	return nil
 }
 
 func reloadCaddy() error {
@@ -4604,13 +5065,15 @@ type auditEntry struct {
 }
 
 type npmProxyLocation struct {
-	Path                string             `json:"path"`
-	ForwardScheme       string             `json:"forward_scheme"`
-	ForwardHost         string             `json:"forward_host"`
-	ForwardPort         int                `json:"forward_port"`
-	ForwardPath         string             `json:"forward_path,omitempty"`
-	Upstreams           []npmProxyUpstream `json:"upstreams,omitempty"`
-	LoadBalancingPolicy string             `json:"load_balancing_policy,omitempty"`
+	Path                string                     `json:"path"`
+	ForwardScheme       string                     `json:"forward_scheme"`
+	ForwardHost         string                     `json:"forward_host"`
+	ForwardPort         int                        `json:"forward_port"`
+	ForwardPath         string                     `json:"forward_path,omitempty"`
+	Upstreams           []npmProxyUpstream         `json:"upstreams,omitempty"`
+	LoadBalancingPolicy string                     `json:"load_balancing_policy,omitempty"`
+	ReverseProxyMode    string                     `json:"reverse_proxy_mode,omitempty"`
+	ReverseProxy        ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
 }
 
 type npmProxyUpstream struct {
@@ -4621,35 +5084,36 @@ type npmProxyUpstream struct {
 }
 
 type npmProxyHost struct {
-	ID                         int                `json:"id"`
-	CreatedOn                  string             `json:"created_on"`
-	ModifiedOn                 string             `json:"modified_on"`
-	OwnerUserID                int                `json:"owner_user_id"`
-	ServiceName                string             `json:"service_name,omitempty"`
-	DomainNames                []string           `json:"domain_names"`
-	ListenPort                 int                `json:"listen_port"`
-	ListenPorts                []int              `json:"listen_ports,omitempty"`
-	ForwardScheme              string             `json:"forward_scheme"`
-	ForwardHost                string             `json:"forward_host"`
-	ForwardPort                int                `json:"forward_port"`
-	Upstreams                  []npmProxyUpstream `json:"upstreams,omitempty"`
-	LoadBalancingPolicy        string             `json:"load_balancing_policy,omitempty"`
-	Locations                  []npmProxyLocation `json:"locations,omitempty"`
-	AccessListID               int                `json:"access_list_id"`
-	CertificateID              any                `json:"certificate_id"`
-	SSLForced                  bool               `json:"ssl_forced"`
-	Meta                       map[string]any     `json:"meta"`
-	AllowWebsocketUpgrade      bool               `json:"allow_websocket_upgrade"`
-	HTTP2Support               bool               `json:"http2_support"`
-	Enabled                    bool               `json:"enabled"`
-	HSTSEnabled                bool               `json:"hsts_enabled"`
-	HSTSSubdomains             bool               `json:"hsts_subdomains"`
-	TrustForwardedProto        bool               `json:"trust_forwarded_proto"`
-	ForwardAuth                ForwardAuthConfig  `json:"forward_auth,omitempty"`
-	UpstreamInsecureSkipVerify bool               `json:"upstream_insecure_skip_verify,omitempty"`
-	Owner                      npmUser            `json:"owner,omitempty"`
-	Certificate                *npmCertificate    `json:"certificate,omitempty"`
-	AccessList                 *npmAccessList     `json:"access_list,omitempty"`
+	ID                         int                        `json:"id"`
+	CreatedOn                  string                     `json:"created_on"`
+	ModifiedOn                 string                     `json:"modified_on"`
+	OwnerUserID                int                        `json:"owner_user_id"`
+	ServiceName                string                     `json:"service_name,omitempty"`
+	DomainNames                []string                   `json:"domain_names"`
+	ListenPort                 int                        `json:"listen_port"`
+	ListenPorts                []int                      `json:"listen_ports,omitempty"`
+	ForwardScheme              string                     `json:"forward_scheme"`
+	ForwardHost                string                     `json:"forward_host"`
+	ForwardPort                int                        `json:"forward_port"`
+	Upstreams                  []npmProxyUpstream         `json:"upstreams,omitempty"`
+	LoadBalancingPolicy        string                     `json:"load_balancing_policy,omitempty"`
+	Locations                  []npmProxyLocation         `json:"locations,omitempty"`
+	AccessListID               int                        `json:"access_list_id"`
+	CertificateID              any                        `json:"certificate_id"`
+	SSLForced                  bool                       `json:"ssl_forced"`
+	Meta                       map[string]any             `json:"meta"`
+	AllowWebsocketUpgrade      bool                       `json:"allow_websocket_upgrade"`
+	HTTP2Support               bool                       `json:"http2_support"`
+	Enabled                    bool                       `json:"enabled"`
+	HSTSEnabled                bool                       `json:"hsts_enabled"`
+	HSTSSubdomains             bool                       `json:"hsts_subdomains"`
+	TrustForwardedProto        bool                       `json:"trust_forwarded_proto"`
+	ForwardAuth                ForwardAuthConfig          `json:"forward_auth,omitempty"`
+	UpstreamInsecureSkipVerify bool                       `json:"upstream_insecure_skip_verify,omitempty"`
+	ReverseProxy               ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
+	Owner                      npmUser                    `json:"owner,omitempty"`
+	Certificate                *npmCertificate            `json:"certificate,omitempty"`
+	AccessList                 *npmAccessList             `json:"access_list,omitempty"`
 }
 
 type npmCertificate struct {
@@ -5993,7 +6457,7 @@ func createHTTPACMECertificateFromNPM(item npmCertificate) (npmCertificate, erro
 	if err := cleanupManagedCertConflicts(); err != nil {
 		return npmCertificate{}, err
 	}
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		return npmCertificate{}, fmt.Errorf("reload failed: %w", err)
 	}
 	return certOverviewToNPM(CertOverview{
@@ -6299,7 +6763,7 @@ func createACMECertificateFromNPM(item npmCertificate) (npmCertificate, error) {
 	if err := cleanupManagedCertConflicts(); err != nil {
 		return npmCertificate{}, err
 	}
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		return npmCertificate{}, fmt.Errorf("reload failed: %w", err)
 	}
 	return certOverviewToNPM(CertOverview{
@@ -6427,7 +6891,7 @@ func npmCertificateItemHandler(w http.ResponseWriter, r *http.Request) {
 		// ACME job and turns a retry into "context canceled". Clear the visible error
 		// and let the existing automation continue.
 		if removed > 0 || !hasActiveIssue {
-			if err := reloadCaddy(); err != nil {
+			if err := validateAndReloadCaddy(); err != nil {
 				http.Error(w, "reload failed: "+err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -6753,6 +7217,7 @@ func (r *captureResponse) Write(b []byte) (int, error) {
 func (r *captureResponse) WriteHeader(statusCode int) { r.status = statusCode }
 
 func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxyHost {
+	reverseProxy := effectiveReverseProxyAdvancedConfig(s.ReverseProxy, s.UpstreamInsecureSkipVerify)
 	scheme, host, port := splitBackend(s.Backend)
 	upstreams := siteProxyUpstreamsToNPM(s.Upstreams, s.Backend)
 	if len(upstreams) > 0 {
@@ -6832,6 +7297,8 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 				ForwardPath:         loc.ForwardPath,
 				Upstreams:           locUpstreams,
 				LoadBalancingPolicy: loc.LoadBalancingPolicy,
+				ReverseProxyMode:    defaultString(loc.ReverseProxyMode, "inherit"),
+				ReverseProxy:        normalizeReverseProxyAdvancedConfig(loc.ReverseProxy),
 			})
 		}
 	}
@@ -6861,7 +7328,8 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		HSTSSubdomains:             s.HSTSSubdomains,
 		TrustForwardedProto:        s.TrustForwardedProto,
 		ForwardAuth:                forwardAuth,
-		UpstreamInsecureSkipVerify: s.UpstreamInsecureSkipVerify,
+		UpstreamInsecureSkipVerify: reverseProxy.Transport.TLSInsecureSkipVerify,
+		ReverseProxy:               reverseProxy,
 		Owner:                      localNPMUser,
 		Certificate:                cert,
 		AccessList:                 accessList,
@@ -6985,6 +7453,7 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 	if err != nil {
 		return Site{}, err
 	}
+	reverseProxy := effectiveReverseProxyAdvancedConfig(p.ReverseProxy, p.UpstreamInsecureSkipVerify)
 	var locations []ProxyLocation
 	if len(p.Locations) > 0 {
 		locations = make([]ProxyLocation, 0, len(p.Locations))
@@ -7016,6 +7485,8 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 				Backend:             locBackend,
 				Upstreams:           locUpstreams,
 				LoadBalancingPolicy: strings.TrimSpace(loc.LoadBalancingPolicy),
+				ReverseProxyMode:    defaultString(strings.ToLower(strings.TrimSpace(loc.ReverseProxyMode)), "inherit"),
+				ReverseProxy:        normalizeReverseProxyAdvancedConfig(loc.ReverseProxy),
 			})
 		}
 	}
@@ -7040,7 +7511,8 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		CustomCertFile:             customCertFile,
 		CustomKeyFile:              customKeyFile,
 		ForwardAuth:                forwardAuth,
-		UpstreamInsecureSkipVerify: p.UpstreamInsecureSkipVerify,
+		UpstreamInsecureSkipVerify: reverseProxy.Transport.TLSInsecureSkipVerify,
+		ReverseProxy:               reverseProxy,
 		HSTSEnabled:                p.HSTSEnabled,
 		HSTSSubdomains:             p.HSTSSubdomains,
 		TrustForwardedProto:        p.TrustForwardedProto,
@@ -8003,7 +8475,7 @@ func renderSitesAndReload() error {
 		restoreBackups(backups)
 		return err
 	}
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		restoreBackups(backups)
 		return err
 	}
@@ -8014,7 +8486,7 @@ func syncStreamsAndReload() error {
 	if err := syncStreamsConfig(); err != nil {
 		return err
 	}
-	return reloadCaddy()
+	return validateAndReloadCaddy()
 }
 
 func syncDynamicDNSAndReload() error {
@@ -8024,7 +8496,7 @@ func syncDynamicDNSAndReload() error {
 	if err := syncDynamicDNSProviderRecordsBeforeReload(); err != nil {
 		log.Printf("dynamic dns provider pre-sync before reload: %v", err)
 	}
-	if err := reloadCaddy(); err != nil {
+	if err := validateAndReloadCaddy(); err != nil {
 		return err
 	}
 	if err := refreshDynamicDNSStatuses(); err != nil {

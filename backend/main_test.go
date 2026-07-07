@@ -56,6 +56,56 @@ func withTempPaths(t *testing.T, dir string) {
 	})
 }
 
+func stubCaddyValidate(t *testing.T) {
+	t.Helper()
+	old := validateCaddyConfigExec
+	validateCaddyConfigExec = func() error { return nil }
+	t.Cleanup(func() {
+		validateCaddyConfigExec = old
+	})
+}
+
+func withTempRuntimePaths(t *testing.T, dir string) {
+	t.Helper()
+	oldSitesDir := sitesDir
+	oldCredentialPath := credentialPath
+	oldIssuerCredentialPath := issuerCredentialPath
+	oldAccessListPath := accessListPath
+	oldSettingsPath := settingsPath
+	oldTrustedProxiesConfPath := trustedProxiesConfPath
+	oldCaddyfile := caddyfile
+	oldCaddyAdmin := caddyAdmin
+	oldCaddyCertsDir := caddyCertsDir
+	oldAuditLogPath := auditLogPath
+	sitesDir = filepath.Join(dir, "sites")
+	credentialPath = filepath.Join(dir, "credentials.json")
+	issuerCredentialPath = filepath.Join(dir, "issuer-credentials.json")
+	accessListPath = filepath.Join(dir, "access-lists.json")
+	settingsPath = filepath.Join(dir, "settings.json")
+	trustedProxiesConfPath = filepath.Join(dir, "global.d", "trusted-proxies.conf")
+	caddyfile = filepath.Join(dir, "Caddyfile")
+	caddyCertsDir = filepath.Join(dir, "certs")
+	auditLogPath = filepath.Join(dir, "audit-log.json")
+	if err := os.MkdirAll(sitesDir, 0755); err != nil {
+		t.Fatalf("MkdirAll sitesDir error = %v", err)
+	}
+	if err := os.WriteFile(caddyfile, []byte("{\n    auto_https off\n}\n"), 0644); err != nil {
+		t.Fatalf("WriteFile Caddyfile error = %v", err)
+	}
+	t.Cleanup(func() {
+		sitesDir = oldSitesDir
+		credentialPath = oldCredentialPath
+		issuerCredentialPath = oldIssuerCredentialPath
+		accessListPath = oldAccessListPath
+		settingsPath = oldSettingsPath
+		trustedProxiesConfPath = oldTrustedProxiesConfPath
+		caddyfile = oldCaddyfile
+		caddyAdmin = oldCaddyAdmin
+		caddyCertsDir = oldCaddyCertsDir
+		auditLogPath = oldAuditLogPath
+	})
+}
+
 func writeTestCert(t *testing.T, path string, commonName string, dnsNames ...string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 1024)
@@ -1749,6 +1799,88 @@ func TestRenderSiteSupportsUpstreamInsecureSkipVerify(t *testing.T) {
 	}
 }
 
+func TestRenderSiteSupportsReverseProxyAdvancedConfig(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:    "advanced-upstream",
+		Domain:  "advanced.example.com",
+		Backend: "https://10.0.0.10:8443",
+		NoTLS:   true,
+		ReverseProxy: ReverseProxyAdvancedConfig{
+			HealthCheck: ReverseProxyHealthCheckConfig{
+				Enabled:         true,
+				URI:             "/healthz",
+				Interval:        "10s",
+				Timeout:         "2s",
+				Status:          "200",
+				PassiveEnabled:  true,
+				FailDuration:    "30s",
+				MaxFails:        2,
+				UnhealthyStatus: "503",
+			},
+			Retry: ReverseProxyRetryConfig{
+				Enabled:     true,
+				TryDuration: "5s",
+				TryInterval: "250ms",
+				Retries:     2,
+				Methods:     "get_head",
+			},
+			Headers: ReverseProxyHeadersConfig{
+				HostMode:  "custom",
+				HostValue: "app.internal",
+				Request: []ProxyHeaderRule{
+					{Action: "set", Name: "X-Forwarded-Host", Value: "{host}"},
+					{Action: "delete", Name: "X-Debug"},
+				},
+				Response: []ProxyHeaderRule{
+					{Action: "set", Name: "X-Proxy", Value: "caddy"},
+				},
+			},
+			Transport: ReverseProxyTransportConfig{
+				Protocol:              "http1",
+				TLSServerName:         "app.internal",
+				TLSInsecureSkipVerify: true,
+				DialTimeout:           "3s",
+				ResponseHeaderTimeout: "5s",
+				ReadTimeout:           "30s",
+				WriteTimeout:          "30s",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"reverse_proxy https://10.0.0.10:8443 {",
+		"health_uri /healthz",
+		"health_interval 10s",
+		"health_timeout 2s",
+		"health_status 200",
+		"fail_duration 30s",
+		"max_fails 2",
+		"unhealthy_status 503",
+		"lb_try_duration 5s",
+		"lb_try_interval 250ms",
+		"lb_retries 2",
+		"lb_retry_match method GET HEAD",
+		"header_up Host \"app.internal\"",
+		"header_up X-Forwarded-Host \"{host}\"",
+		"header_up -X-Debug",
+		"header_down X-Proxy \"caddy\"",
+		"transport http {",
+		"versions 1.1",
+		"tls_server_name \"app.internal\"",
+		"tls_insecure_skip_verify",
+		"dial_timeout 3s",
+		"response_header_timeout 5s",
+		"read_timeout 30s",
+		"write_timeout 30s",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+}
+
 func TestRenderSiteSupportsMultipleUpstreamsAndLoadBalancingPolicy(t *testing.T) {
 	conf, err := renderSite(Site{
 		Name:                "multi-upstream",
@@ -1882,6 +2014,272 @@ func TestValidateSiteProxyConfigRejectsHTTPOnlyListenPort443(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("validateSiteProxyConfig error = %v, want nil for custom HTTP port", err)
+	}
+}
+
+func TestValidateSiteProxyConfigRejectsInvalidReverseProxyAdvancedConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  ReverseProxyAdvancedConfig
+	}{
+		{
+			name: "active health without URI",
+			cfg: ReverseProxyAdvancedConfig{
+				HealthCheck: ReverseProxyHealthCheckConfig{Enabled: true, Interval: "10s"},
+			},
+		},
+		{
+			name: "invalid status",
+			cfg: ReverseProxyAdvancedConfig{
+				HealthCheck: ReverseProxyHealthCheckConfig{Enabled: true, URI: "/health", Status: "999"},
+			},
+		},
+		{
+			name: "invalid header name",
+			cfg: ReverseProxyAdvancedConfig{
+				Headers: ReverseProxyHeadersConfig{
+					Request: []ProxyHeaderRule{{Action: "set", Name: "Bad Header", Value: "x"}},
+				},
+			},
+		},
+		{
+			name: "header injection",
+			cfg: ReverseProxyAdvancedConfig{
+				Headers: ReverseProxyHeadersConfig{
+					Request: []ProxyHeaderRule{{Action: "set", Name: "X-Test", Value: "ok\nbad"}},
+				},
+			},
+		},
+		{
+			name: "invalid transport protocol",
+			cfg: ReverseProxyAdvancedConfig{
+				Transport: ReverseProxyTransportConfig{Protocol: "http3"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSiteProxyConfig(Site{
+				Domain:       "app.example.com",
+				Backend:      "http://127.0.0.1:8080",
+				ReverseProxy: tc.cfg,
+			})
+			if err == nil {
+				t.Fatalf("validateSiteProxyConfig error = nil, want invalid reverse proxy advanced config error")
+			}
+		})
+	}
+}
+
+func TestNPMProxyHostRoundTripsReverseProxyAdvancedConfig(t *testing.T) {
+	host := npmProxyHost{
+		DomainNames:   []string{"advanced.example.com"},
+		ForwardScheme: "https",
+		ForwardHost:   "10.0.0.10",
+		ForwardPort:   8443,
+		SSLForced:     true,
+		Enabled:       true,
+		Meta:          map[string]any{},
+		ReverseProxy: ReverseProxyAdvancedConfig{
+			Retry: ReverseProxyRetryConfig{Enabled: true, TryDuration: "5s", Methods: "get_head"},
+			Headers: ReverseProxyHeadersConfig{
+				HostMode: "upstream",
+			},
+			Transport: ReverseProxyTransportConfig{
+				TLSInsecureSkipVerify: true,
+				TLSServerName:         "app.internal",
+			},
+		},
+		Locations: []npmProxyLocation{
+			{
+				Path:             "/api",
+				ForwardScheme:    "http",
+				ForwardHost:      "10.0.0.20",
+				ForwardPort:      8080,
+				ReverseProxyMode: "custom",
+				ReverseProxy: ReverseProxyAdvancedConfig{
+					Headers: ReverseProxyHeadersConfig{HostMode: "host"},
+				},
+			},
+		},
+	}
+
+	site, err := npmProxyHostToSite(host, "advanced")
+	if err != nil {
+		t.Fatalf("npmProxyHostToSite error = %v", err)
+	}
+	if !site.UpstreamInsecureSkipVerify || !site.ReverseProxy.Transport.TLSInsecureSkipVerify || site.ReverseProxy.Retry.Methods != "get_head" {
+		t.Fatalf("site reverse proxy = %#v, legacy skip verify = %v", site.ReverseProxy, site.UpstreamInsecureSkipVerify)
+	}
+	if len(site.Locations) != 1 || site.Locations[0].ReverseProxyMode != "custom" || site.Locations[0].ReverseProxy.Headers.HostMode != "host" {
+		t.Fatalf("site locations = %#v", site.Locations)
+	}
+
+	out := siteToNPMProxyHost(site, nil)
+	if !out.UpstreamInsecureSkipVerify || !out.ReverseProxy.Transport.TLSInsecureSkipVerify || out.ReverseProxy.Transport.TLSServerName != "app.internal" {
+		t.Fatalf("round-trip reverse proxy = %#v, skip verify = %v", out.ReverseProxy, out.UpstreamInsecureSkipVerify)
+	}
+	if len(out.Locations) != 1 || out.Locations[0].ReverseProxyMode != "custom" || out.Locations[0].ReverseProxy.Headers.HostMode != "host" {
+		t.Fatalf("round-trip locations = %#v", out.Locations)
+	}
+}
+
+func TestNPMProxyHostCreateRendersReverseProxyAdvancedConfig(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+
+	validateCalled := false
+	oldValidate := validateCaddyConfigExec
+	validateCaddyConfigExec = func() error {
+		validateCalled = true
+		return nil
+	}
+	t.Cleanup(func() {
+		validateCaddyConfigExec = oldValidate
+	})
+
+	reloadCalled := false
+	adminServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/load" {
+			t.Fatalf("admin path = %q, want /load", r.URL.Path)
+		}
+		reloadCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer adminServer.Close()
+	caddyAdmin = adminServer.URL
+
+	body, err := json.Marshal(npmProxyHost{
+		DomainNames:   []string{"advanced.local"},
+		ListenPort:    80,
+		ForwardScheme: "https",
+		ForwardHost:   "10.0.0.10",
+		ForwardPort:   8443,
+		SSLForced:     false,
+		Enabled:       true,
+		Meta:          map[string]any{},
+		ReverseProxy: ReverseProxyAdvancedConfig{
+			HealthCheck: ReverseProxyHealthCheckConfig{
+				Enabled:         true,
+				URI:             "/healthz",
+				Interval:        "10s",
+				Timeout:         "2s",
+				Status:          "200",
+				PassiveEnabled:  true,
+				FailDuration:    "30s",
+				MaxFails:        2,
+				UnhealthyStatus: "503",
+			},
+			Retry: ReverseProxyRetryConfig{
+				Enabled:     true,
+				TryDuration: "5s",
+				TryInterval: "250ms",
+				Retries:     2,
+				Methods:     "get_head",
+			},
+			Headers: ReverseProxyHeadersConfig{
+				HostMode:  "custom",
+				HostValue: "app.internal",
+				Request:   []ProxyHeaderRule{{Action: "delete", Name: "X-Debug"}},
+				Response:  []ProxyHeaderRule{{Action: "set", Name: "X-Proxy", Value: "caddy"}},
+			},
+			Transport: ReverseProxyTransportConfig{
+				Protocol:              "http1",
+				TLSServerName:         "app.internal",
+				TLSInsecureSkipVerify: true,
+				DialTimeout:           "3s",
+				ResponseHeaderTimeout: "5s",
+				ReadTimeout:           "30s",
+				WriteTimeout:          "30s",
+			},
+		},
+		Locations: []npmProxyLocation{
+			{
+				Path:             "/api",
+				ForwardScheme:    "http",
+				ForwardHost:      "10.0.0.20",
+				ForwardPort:      8080,
+				ReverseProxyMode: "custom",
+				ReverseProxy: ReverseProxyAdvancedConfig{
+					Retry:   ReverseProxyRetryConfig{Enabled: true, TryDuration: "2s", TryInterval: "250ms", Retries: 1},
+					Headers: ReverseProxyHeadersConfig{HostMode: "host"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal error = %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	npmProxyHostsHandler(rr, httptest.NewRequest(http.MethodPost, "/nginx/proxy-hosts", bytes.NewReader(body)))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %q", rr.Code, rr.Body.String())
+	}
+	if !validateCalled {
+		t.Fatalf("caddy validate was not called")
+	}
+	if !reloadCalled {
+		t.Fatalf("caddy reload was not called")
+	}
+
+	var created npmProxyHost
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatalf("json.Unmarshal created error = %v", err)
+	}
+	if created.ReverseProxy.HealthCheck.URI != "/healthz" || !created.ReverseProxy.Transport.TLSInsecureSkipVerify {
+		t.Fatalf("created reverse proxy = %#v", created.ReverseProxy)
+	}
+	if len(created.Locations) != 1 || created.Locations[0].ReverseProxyMode != "custom" {
+		t.Fatalf("created locations = %#v", created.Locations)
+	}
+
+	var saved Site
+	if err := loadJSONFile(filepath.Join(sitesDir, "advanced.local"+metaSuffix), &saved); err != nil {
+		t.Fatalf("load saved site error = %v", err)
+	}
+	if saved.ReverseProxy.Headers.HostValue != "app.internal" || saved.Locations[0].ReverseProxy.Retry.TryDuration != "2s" {
+		t.Fatalf("saved site reverse proxy = %#v locations = %#v", saved.ReverseProxy, saved.Locations)
+	}
+
+	confBytes, err := os.ReadFile(filepath.Join(sitesDir, "advanced.local"+confSuffix))
+	if err != nil {
+		t.Fatalf("read rendered conf error = %v", err)
+	}
+	conf := string(confBytes)
+	for _, want := range []string{
+		"reverse_proxy https://10.0.0.10:8443 {",
+		"health_uri /healthz",
+		"lb_retry_match method GET HEAD",
+		"header_up Host \"app.internal\"",
+		"header_up -X-Debug",
+		"header_down X-Proxy \"caddy\"",
+		"transport http {",
+		"tls_server_name \"app.internal\"",
+		"tls_insecure_skip_verify",
+		"read_timeout 30s",
+		"write_timeout 30s",
+		"handle_path /api {",
+		"reverse_proxy http://10.0.0.20:8080 {",
+		"lb_try_duration 2s",
+		"header_up Host {host}",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("rendered conf = %q, want %q", conf, want)
+		}
+	}
+
+	getRR := httptest.NewRecorder()
+	npmProxyHostsHandler(getRR, httptest.NewRequest(http.MethodGet, "/nginx/proxy-hosts", nil))
+	if getRR.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %q", getRR.Code, getRR.Body.String())
+	}
+	var rows []npmProxyHost
+	if err := json.Unmarshal(getRR.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("json.Unmarshal rows error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].ReverseProxy.Retry.Methods != "get_head" || rows[0].Locations[0].ReverseProxy.Headers.HostMode != "host" {
+		t.Fatalf("GET rows = %#v", rows)
 	}
 }
 
@@ -3493,6 +3891,7 @@ func TestRefreshDynamicDNSStatusesReportsRemoteARecordMismatch(t *testing.T) {
 }
 
 func TestSyncDynamicDNSAndReloadRefreshesStatusAfterSave(t *testing.T) {
+	stubCaddyValidate(t)
 	tmp := t.TempDir()
 	withTempPaths(t, tmp)
 	oldDynamicDNSPath := dynamicDNSPath

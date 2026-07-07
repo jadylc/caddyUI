@@ -6,6 +6,7 @@ export * from "./DNSProviderFields";
 export * from "./DomainCertificateBindingsField";
 export * from "./DomainNamesField";
 export * from "./LocationsFields";
+export * from "./ReverseProxyAdvancedPanel";
 export * from "./SSLCertificateField";
 export * from "./SSLOptionsFields";
 export * from "./UpstreamsFields";
