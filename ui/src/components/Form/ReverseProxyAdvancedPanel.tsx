@@ -248,19 +248,24 @@ function SelectField({
 function Section({
 	title,
 	summary,
+	description,
 	children,
 	open = false,
 }: {
 	title: string;
 	summary: string;
+	description?: string;
 	children: ReactNode;
 	open?: boolean;
 }) {
 	return (
-		<details className="border rounded-2 mb-3" open={open}>
-			<summary className="d-flex align-items-center justify-content-between gap-3 p-3 cursor-pointer">
-				<span className="fw-medium">{title}</span>
-				<span className="text-secondary small text-end">{summary}</span>
+		<details className="border rounded-2 mb-2" open={open}>
+			<summary className="d-flex align-items-start justify-content-between gap-3 p-3 cursor-pointer">
+				<span>
+					<span className="fw-medium d-block">{title}</span>
+					{description ? <span className="text-secondary small">{description}</span> : null}
+				</span>
+				<span className="badge bg-secondary-lt text-secondary text-nowrap">{summary}</span>
 			</summary>
 			<div className="border-top p-3">{children}</div>
 		</details>
@@ -280,14 +285,15 @@ function HeaderRules({ name, label }: { name: string; label: string }) {
 				<label className="form-label m-0">{label}</label>
 				<button
 					type="button"
-					className="btn btn-sm btn-icon"
+					className="btn btn-sm"
 					onClick={() => setRules([...rules, blankHeaderRule()])}
 					title="添加头规则"
 				>
 					<IconPlus size={16} />
+					添加
 				</button>
 			</div>
-			{rules.length === 0 ? <div className="text-secondary small mb-2">未设置</div> : null}
+			{rules.length === 0 ? <div className="text-secondary small mb-2">保持默认</div> : null}
 			<div className="d-flex flex-column gap-2">
 				{rules.map((rule, idx) => (
 					<div className="row g-2 align-items-end" key={idx}>
@@ -340,31 +346,50 @@ function HeaderRules({ name, label }: { name: string; label: string }) {
 export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = false, inheritNote }: Props) {
 	const { values } = useFormikContext<any>();
 	const cfg = withReverseProxyDefaults(getIn(values, name));
-	const healthSummary = cfg.healthCheck?.enabled
-		? `主动 ${cfg.healthCheck.uri || "未填路径"}`
-		: cfg.healthCheck?.passiveEnabled
-			? "仅被动"
-			: "关闭";
-	const retrySummary = cfg.retry?.enabled
-		? `${cfg.retry.retries || 0} 次 / ${cfg.retry.tryDuration || "默认窗口"}`
-		: "关闭";
-	const headerRuleCount = (cfg.headers?.request?.length || 0) + (cfg.headers?.response?.length || 0);
-	const headerSummary = cfg.headers?.hostMode || headerRuleCount > 0 ? "已配置" : "默认";
-	const transportSummary =
+	const activeHealthEnabled = !!cfg.healthCheck?.enabled;
+	const passiveHealthEnabled = !!cfg.healthCheck?.passiveEnabled;
+	const retryEnabled = !!cfg.retry?.enabled;
+	const customHostEnabled = cfg.headers?.hostMode === "custom";
+	const reverseProxySuffix = ".reverseProxy";
+	const ownerPath = name.endsWith(reverseProxySuffix) ? name.slice(0, -reverseProxySuffix.length) : "";
+	const upstreamsPath = ownerPath ? `${ownerPath}.upstreams` : "upstreams";
+	const forwardSchemePath = ownerPath ? `${ownerPath}.forwardScheme` : "forwardScheme";
+	const upstreams = Array.isArray(getIn(values, upstreamsPath)) ? getIn(values, upstreamsPath) : [];
+	const hasHTTPSUpstream =
+		upstreams.some((upstream: any) => upstream?.forwardScheme === "https") ||
+		(!upstreams.length && getIn(values, forwardSchemePath) === "https");
+	const hasConnectionSettings =
 		cfg.transport?.protocol ||
 		cfg.transport?.tlsServerName ||
 		cfg.transport?.tlsInsecureSkipVerify ||
 		cfg.transport?.dialTimeout ||
 		cfg.transport?.responseHeaderTimeout ||
 		cfg.transport?.readTimeout ||
-		cfg.transport?.writeTimeout
-			? "已配置"
+		cfg.transport?.writeTimeout;
+	const healthSummary = activeHealthEnabled
+		? `主动 ${cfg.healthCheck?.uri || "未填路径"}`
+		: passiveHealthEnabled
+			? "被动"
 			: "默认";
+	const retrySummary = cfg.retry?.enabled
+		? `${cfg.retry.retries || 0} 次 / ${cfg.retry.tryDuration || "默认窗口"}`
+		: "默认";
+	const headerRuleCount = (cfg.headers?.request?.length || 0) + (cfg.headers?.response?.length || 0);
+	const headerSummary = cfg.headers?.hostMode || headerRuleCount > 0 ? "已配置" : "默认";
+	const transportSummary = hasConnectionSettings ? "已配置" : "默认";
 
 	return (
 		<div className={cn("reverse-proxy-advanced", compact && "small")}>
 			{inheritNote ? <div className="alert alert-info py-2">{inheritNote}</div> : null}
-			<Section title="健康检查" summary={healthSummary}>
+			<div className="text-secondary small mb-3">
+				普通反代保持默认即可；只有在多上游、内网证书、gRPC 或慢服务场景下再配置这些项。
+			</div>
+			<Section
+				title="健康检查"
+				summary={healthSummary}
+				description="上游故障时自动摘除，恢复后再加入。"
+				open={activeHealthEnabled || passiveHealthEnabled}
+			>
 				<div className="divide-y">
 					<div className="pb-3">
 						<SwitchField
@@ -374,42 +399,44 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 							help="Caddy 会定期请求健康路径，失败的上游会暂时摘除。"
 						/>
 					</div>
-					<div className="pt-3">
-						<div className="row">
-							<div className="col-md-4">
-								<TextField
-									name={`${name}.healthCheck.uri`}
-									id={`${name}-health-uri`}
-									label="检查路径"
-									placeholder="/healthz"
-								/>
-							</div>
-							<div className="col-md-3">
-								<SelectField
-									name={`${name}.healthCheck.interval`}
-									id={`${name}-health-interval`}
-									label="间隔"
-									options={durationOptions}
-								/>
-							</div>
-							<div className="col-md-3">
-								<SelectField
-									name={`${name}.healthCheck.timeout`}
-									id={`${name}-health-timeout`}
-									label="超时"
-									options={durationOptions}
-								/>
-							</div>
-							<div className="col-md-2">
-								<SelectField
-									name={`${name}.healthCheck.status`}
-									id={`${name}-health-status`}
-									label="成功状态"
-									options={statusOptions}
-								/>
+					{activeHealthEnabled ? (
+						<div className="pt-3">
+							<div className="row">
+								<div className="col-md-4">
+									<TextField
+										name={`${name}.healthCheck.uri`}
+										id={`${name}-health-uri`}
+										label="检查路径"
+										placeholder="/healthz"
+									/>
+								</div>
+								<div className="col-md-3">
+									<SelectField
+										name={`${name}.healthCheck.interval`}
+										id={`${name}-health-interval`}
+										label="间隔"
+										options={durationOptions}
+									/>
+								</div>
+								<div className="col-md-3">
+									<SelectField
+										name={`${name}.healthCheck.timeout`}
+										id={`${name}-health-timeout`}
+										label="超时"
+										options={durationOptions}
+									/>
+								</div>
+								<div className="col-md-2">
+									<SelectField
+										name={`${name}.healthCheck.status`}
+										id={`${name}-health-status`}
+										label="成功状态"
+										options={statusOptions}
+									/>
+								</div>
 							</div>
 						</div>
-					</div>
+					) : null}
 					<div className="pt-3">
 						<SwitchField
 							name={`${name}.healthCheck.passiveEnabled`}
@@ -417,37 +444,44 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 							label="被动失败检测"
 							help="根据请求失败和响应状态临时摘除异常上游。"
 						/>
-						<div className="row mt-3">
-							<div className="col-md-4">
-								<SelectField
-									name={`${name}.healthCheck.failDuration`}
-									id={`${name}-fail-duration`}
-									label="失败窗口"
-									options={durationOptions}
-								/>
+						{passiveHealthEnabled ? (
+							<div className="row mt-3">
+								<div className="col-md-4">
+									<SelectField
+										name={`${name}.healthCheck.failDuration`}
+										id={`${name}-fail-duration`}
+										label="失败窗口"
+										options={durationOptions}
+									/>
+								</div>
+								<div className="col-md-4">
+									<TextField
+										name={`${name}.healthCheck.maxFails`}
+										id={`${name}-max-fails`}
+										label="最大失败次数"
+										type="number"
+										min={0}
+									/>
+								</div>
+								<div className="col-md-4">
+									<SelectField
+										name={`${name}.healthCheck.unhealthyStatus`}
+										id={`${name}-unhealthy-status`}
+										label="失败状态"
+										options={statusOptions}
+									/>
+								</div>
 							</div>
-							<div className="col-md-4">
-								<TextField
-									name={`${name}.healthCheck.maxFails`}
-									id={`${name}-max-fails`}
-									label="最大失败次数"
-									type="number"
-									min={0}
-								/>
-							</div>
-							<div className="col-md-4">
-								<SelectField
-									name={`${name}.healthCheck.unhealthyStatus`}
-									id={`${name}-unhealthy-status`}
-									label="失败状态"
-									options={statusOptions}
-								/>
-							</div>
-						</div>
+						) : null}
 					</div>
 				</div>
 			</Section>
-			<Section title="重试策略" summary={retrySummary}>
+			<Section
+				title="重试策略"
+				summary={retrySummary}
+				description="上游短暂不可用时，在同一次请求内重试。"
+				open={retryEnabled}
+			>
 				<div className="mb-3">
 					<SwitchField
 						name={`${name}.retry.enabled`}
@@ -456,46 +490,53 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 						help="用于上游拨号失败、临时不可用等场景。"
 					/>
 				</div>
-				<div className="row">
-					<div className="col-md-3">
-						<SelectField
-							name={`${name}.retry.tryDuration`}
-							id={`${name}-try-duration`}
-							label="总时长"
-							options={durationOptions}
-						/>
+				{retryEnabled ? (
+					<div className="row">
+						<div className="col-md-3">
+							<SelectField
+								name={`${name}.retry.tryDuration`}
+								id={`${name}-try-duration`}
+								label="重试窗口"
+								options={durationOptions}
+							/>
+						</div>
+						<div className="col-md-3">
+							<SelectField
+								name={`${name}.retry.tryInterval`}
+								id={`${name}-try-interval`}
+								label="重试间隔"
+								options={durationOptions}
+							/>
+						</div>
+						<div className="col-md-3">
+							<TextField
+								name={`${name}.retry.retries`}
+								id={`${name}-retries`}
+								label="最大次数"
+								type="number"
+								min={0}
+							/>
+						</div>
+						<div className="col-md-3">
+							<SelectField
+								name={`${name}.retry.methods`}
+								id={`${name}-retry-methods`}
+								label="仅重试方法"
+								options={[
+									{ value: "", label: "Caddy 默认" },
+									{ value: "get_head", label: "GET / HEAD" },
+								]}
+							/>
+						</div>
 					</div>
-					<div className="col-md-3">
-						<SelectField
-							name={`${name}.retry.tryInterval`}
-							id={`${name}-try-interval`}
-							label="间隔"
-							options={durationOptions}
-						/>
-					</div>
-					<div className="col-md-3">
-						<TextField
-							name={`${name}.retry.retries`}
-							id={`${name}-retries`}
-							label="次数"
-							type="number"
-							min={0}
-						/>
-					</div>
-					<div className="col-md-3">
-						<SelectField
-							name={`${name}.retry.methods`}
-							id={`${name}-retry-methods`}
-							label="方法限制"
-							options={[
-								{ value: "", label: "Caddy 默认" },
-								{ value: "get_head", label: "GET / HEAD" },
-							]}
-						/>
-					</div>
-				</div>
+				) : null}
 			</Section>
-			<Section title="请求/响应头" summary={headerSummary}>
+			<Section
+				title="请求/响应头"
+				summary={headerSummary}
+				description="改写发往上游的请求头，或追加返回客户端的响应头。"
+				open={headerSummary !== "默认"}
+			>
 				<div className="row">
 					<div className="col-md-4">
 						<SelectField
@@ -510,49 +551,60 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 							]}
 						/>
 					</div>
-					<div className="col-md-8">
-						<TextField
-							name={`${name}.headers.hostValue`}
-							id={`${name}-host-value`}
-							label="自定义 Host"
-							placeholder="app.internal"
-						/>
-					</div>
+					{customHostEnabled ? (
+						<div className="col-md-8">
+							<TextField
+								name={`${name}.headers.hostValue`}
+								id={`${name}-host-value`}
+								label="自定义 Host"
+								placeholder="app.internal"
+							/>
+						</div>
+					) : null}
 				</div>
-				<HeaderRules name={`${name}.headers.request`} label="请求头 header_up" />
-				<HeaderRules name={`${name}.headers.response`} label="响应头 header_down" />
+				<HeaderRules name={`${name}.headers.request`} label="发往上游的请求头" />
+				<HeaderRules name={`${name}.headers.response`} label="返回客户端的响应头" />
 			</Section>
-			<Section title="Transport" summary={transportSummary}>
+			<Section
+				title="上游连接"
+				summary={transportSummary}
+				description="控制 Caddy 连接上游时的协议、TLS 和超时。"
+				open={!!hasConnectionSettings}
+			>
 				<div className="row">
-					<div className="col-md-4">
+					<div className={hasHTTPSUpstream ? "col-md-4" : "col-md-12"}>
 						<SelectField
 							name={`${name}.transport.protocol`}
 							id={`${name}-transport-protocol`}
-							label="HTTP 版本"
+							label="上游 HTTP 版本"
 							options={[
 								{ value: "", label: "默认" },
-								{ value: "h2c", label: "h2c" },
+								{ value: "h2c", label: "h2c（明文 HTTP/2）" },
 								{ value: "http1", label: "HTTP/1.1" },
 							]}
 						/>
 					</div>
-					<div className="col-md-8">
-						<TextField
-							name={`${name}.transport.tlsServerName`}
-							id={`${name}-tls-server-name`}
-							label="TLS Server Name"
-							placeholder="app.internal"
+					{hasHTTPSUpstream ? (
+						<div className="col-md-8">
+							<TextField
+								name={`${name}.transport.tlsServerName`}
+								id={`${name}-tls-server-name`}
+								label="上游 TLS 主机名"
+								placeholder="app.internal"
+							/>
+						</div>
+					) : null}
+				</div>
+				{hasHTTPSUpstream ? (
+					<div className="mb-3">
+						<SwitchField
+							name={`${name}.transport.tlsInsecureSkipVerify`}
+							id={`${name}-tls-skip-verify`}
+							label="跳过上游 HTTPS 证书校验"
+							help="仅用于自签名或内网证书。公网或不可信网络不建议开启。"
 						/>
 					</div>
-				</div>
-				<div className="mb-3">
-					<SwitchField
-						name={`${name}.transport.tlsInsecureSkipVerify`}
-						id={`${name}-tls-skip-verify`}
-						label="跳过上游 HTTPS 证书校验"
-						help="仅用于自签名或内网证书，上游为 HTTP 时不会生成该配置。"
-					/>
-				</div>
+				) : null}
 				<div className="row">
 					<div className="col-md-3">
 						<SelectField
