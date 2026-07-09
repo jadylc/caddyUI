@@ -24,6 +24,8 @@ export * from "./useProxyHost";
 export * from "./useProxyHosts";
 export * from "./useRedirectionHost";
 export * from "./useRedirectionHosts";
+export * from "./useStaticHost";
+export * from "./useStaticHosts";
 export * from "./useStream";
 export * from "./useStreams";
 export * from "./useTheme";

@@ -2951,7 +2951,7 @@ func TestStampNPMAccessListReturnsEmptySlices(t *testing.T) {
 	}
 }
 
-func TestLoadNPMAccessListsCountsLinkedProxyHosts(t *testing.T) {
+func TestLoadNPMAccessListsCountsLinkedSites(t *testing.T) {
 	tmp := t.TempDir()
 	withTempPaths(t, tmp)
 	oldSitesDir := sitesDir
@@ -2975,6 +2975,15 @@ func TestLoadNPMAccessListsCountsLinkedProxyHosts(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("saveJSONFile site error = %v", err)
 	}
+	if err := saveJSONFile(filepath.Join(sitesDir, "docs.json"), Site{
+		Name:         "docs",
+		Kind:         "static",
+		Domain:       "docs.example.com",
+		RootPath:     "/srv/sites/docs",
+		AccessListID: 123,
+	}); err != nil {
+		t.Fatalf("saveJSONFile static site error = %v", err)
+	}
 
 	items, err := loadNPMAccessLists()
 	if err != nil {
@@ -2983,8 +2992,8 @@ func TestLoadNPMAccessListsCountsLinkedProxyHosts(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("len(items) = %d, want 1", len(items))
 	}
-	if items[0].ProxyHostCount != 1 {
-		t.Fatalf("ProxyHostCount = %d, want 1", items[0].ProxyHostCount)
+	if items[0].ProxyHostCount != 2 {
+		t.Fatalf("ProxyHostCount = %d, want 2", items[0].ProxyHostCount)
 	}
 }
 
@@ -3074,6 +3083,200 @@ func TestRenderSiteAccessListSatisfyAnyBypassesAuthForAllowedIPs(t *testing.T) {
 	}
 	if strings.Contains(conf, "respond @access_allow 403") {
 		t.Fatalf("config = %q, should not reject non-allowed clients before auth when satisfy_any is true", conf)
+	}
+}
+
+func TestRenderStaticSiteSupportsBrowse(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:              "docs",
+		Kind:              "static",
+		Domain:            "docs.example.com",
+		RootPath:          "/srv/sites/docs",
+		StaticMode:        "static",
+		DirectoryBrowsing: true,
+		NoTLS:             true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"http://docs.example.com {",
+		`root * "/srv/sites/docs"`,
+		"file_server browse",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+	if strings.Contains(conf, "reverse_proxy") {
+		t.Fatalf("renderSite = %q, should not render reverse_proxy for static site", conf)
+	}
+}
+
+func TestRenderStaticSiteSupportsSPAFallback(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:       "app",
+		Kind:       "static",
+		Domain:     "app.example.com",
+		RootPath:   "/srv/sites/app",
+		StaticMode: "spa",
+		NoTLS:      true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		`root * "/srv/sites/app"`,
+		`try_files {path} {path}/ "/index.html"`,
+		"file_server",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+	if strings.Contains(conf, "file_server browse") {
+		t.Fatalf("renderSite = %q, should not enable browse for spa mode", conf)
+	}
+}
+
+func TestNPMStaticHostRoundTripsSiteConfig(t *testing.T) {
+	host := npmStaticHost{
+		ServiceName:       "Docs",
+		DomainNames:       []string{"docs.example.com"},
+		ListenPort:        8080,
+		ListenPorts:       []int{8080, 8081},
+		RootPath:          "/srv/sites/docs",
+		Mode:              "spa",
+		DirectoryBrowsing: true,
+		AccessListID:      123,
+		SSLForced:         false,
+		Enabled:           true,
+	}
+	site, err := npmStaticHostToSite(host, "docs")
+	if err != nil {
+		t.Fatalf("npmStaticHostToSite error = %v", err)
+	}
+	if site.Kind != "static" || site.ServiceName != "Docs" || site.RootPath != "/srv/sites/docs" {
+		t.Fatalf("site = %#v, want static Docs under /srv/sites/docs", site)
+	}
+	if site.StaticMode != "spa" || site.IndexFile != "/index.html" || site.DirectoryBrowsing {
+		t.Fatalf("site static config = mode %q index %q browse %v", site.StaticMode, site.IndexFile, site.DirectoryBrowsing)
+	}
+	if site.AccessListID != 123 || !site.NoTLS || site.Disabled {
+		t.Fatalf("site access/tls/enabled = access %d noTLS %v disabled %v", site.AccessListID, site.NoTLS, site.Disabled)
+	}
+
+	out := siteToNPMStaticHost(site, nil)
+	if out.Mode != "spa" || out.IndexFile != "/index.html" || out.DirectoryBrowsing {
+		t.Fatalf("out static config = %#v", out)
+	}
+	if out.ListenPort != 8080 || len(out.ListenPorts) != 2 || out.ListenPorts[1] != 8081 {
+		t.Fatalf("out listen = %d %#v, want 8080 [8080 8081]", out.ListenPort, out.ListenPorts)
+	}
+}
+
+func TestValidateSiteStaticConfigRejectsInvalidConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		site Site
+	}{
+		{
+			name: "relative root",
+			site: Site{Kind: "static", Domain: "app.example.com", RootPath: "sites/app", StaticMode: "static"},
+		},
+		{
+			name: "http only 443",
+			site: Site{Kind: "static", Domain: "app.example.com:443", RootPath: "/srv/app", StaticMode: "static", NoTLS: true},
+		},
+		{
+			name: "bad spa fallback",
+			site: Site{Kind: "static", Domain: "app.example.com", RootPath: "/srv/app", StaticMode: "spa", IndexFile: "../index.html"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateSiteStaticConfig(tc.site); err == nil {
+				t.Fatalf("validateSiteStaticConfig error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestNPMStaticHostCreateRendersStaticConfig(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+
+	validateCalled := false
+	oldValidate := validateCaddyConfigExec
+	validateCaddyConfigExec = func() error {
+		validateCalled = true
+		return nil
+	}
+	t.Cleanup(func() {
+		validateCaddyConfigExec = oldValidate
+	})
+
+	reloadCalled := false
+	adminServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/load" {
+			t.Fatalf("admin path = %q, want /load", r.URL.Path)
+		}
+		reloadCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer adminServer.Close()
+	caddyAdmin = adminServer.URL
+
+	body, err := json.Marshal(npmStaticHost{
+		ServiceName: "Docs",
+		DomainNames: []string{
+			"docs.example.com",
+		},
+		ListenPort:   8080,
+		RootPath:     "/srv/sites/docs",
+		Mode:         "spa",
+		IndexFile:    "/app.html",
+		SSLForced:    false,
+		AccessListID: 0,
+		Enabled:      true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	npmStaticHostsHandler(rr, httptest.NewRequest(http.MethodPost, "/caddy/static-hosts", bytes.NewReader(body)))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s, want 201", rr.Code, rr.Body.String())
+	}
+	if !validateCalled || !reloadCalled {
+		t.Fatalf("validateCalled=%v reloadCalled=%v, want both true", validateCalled, reloadCalled)
+	}
+
+	var created npmStaticHost
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatalf("Unmarshal created error = %v", err)
+	}
+	if created.Mode != "spa" || created.RootPath != "/srv/sites/docs" || created.IndexFile != "/app.html" {
+		t.Fatalf("created static host = %#v", created)
+	}
+	name, _ := created.Meta["caddy_name"].(string)
+	if name == "" {
+		t.Fatalf("created meta = %#v, want caddy_name", created.Meta)
+	}
+	confBytes, err := os.ReadFile(filepath.Join(sitesDir, name+confSuffix))
+	if err != nil {
+		t.Fatalf("ReadFile conf error = %v", err)
+	}
+	conf := string(confBytes)
+	for _, want := range []string{
+		"http://docs.example.com:8080 {",
+		`root * "/srv/sites/docs"`,
+		`try_files {path} {path}/ "/app.html"`,
+		"file_server",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("conf = %q, want %q", conf, want)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ export interface UserPermissions {
 	userId?: number;
 	visibility: string;
 	proxyHosts: string;
+	staticHosts: string;
 	redirectionHosts: string;
 	deadHosts: string;
 	streams: string;
@@ -93,6 +94,7 @@ export interface Certificate {
 	meta: Record<string, any>;
 	owner?: User;
 	proxyHosts?: ProxyHost[];
+	staticHosts?: StaticHost[];
 	deadHosts?: DeadHost[];
 	redirectionHosts?: RedirectionHost[];
 }
@@ -224,6 +226,33 @@ export interface ProxyHost {
 	forwardAuth?: ForwardAuthConfig;
 	upstreamInsecureSkipVerify?: boolean;
 	reverseProxy?: ReverseProxyAdvancedConfig;
+	// Expansions:
+	owner?: User;
+	accessList?: AccessList;
+	certificate?: Certificate;
+}
+
+export interface StaticHost {
+	id: number;
+	createdOn: string;
+	modifiedOn: string;
+	ownerUserId: number;
+	serviceName?: string;
+	domainNames: string[];
+	listenPort: number;
+	listenPorts?: number[];
+	rootPath: string;
+	mode: "static" | "spa";
+	indexFile?: string;
+	directoryBrowsing: boolean;
+	accessListId: number;
+	certificateId: number;
+	sslForced: boolean;
+	meta: Record<string, any>;
+	http2Support: boolean;
+	enabled: boolean;
+	hstsEnabled: boolean;
+	hstsSubdomains: boolean;
 	// Expansions:
 	owner?: User;
 	accessList?: AccessList;

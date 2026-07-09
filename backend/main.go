@@ -139,13 +139,13 @@ type ProxyUpstream struct {
 	Backend       string `json:"backend,omitempty"`
 }
 
-// Site 反代条目。
+// Site 站点条目。
 type Site struct {
 	CreatedOn                  string                     `json:"created_on,omitempty"`
 	ModifiedOn                 string                     `json:"modified_on,omitempty"`
 	Name                       string                     `json:"name"`
 	ServiceName                string                     `json:"service_name,omitempty"`
-	Kind                       string                     `json:"kind,omitempty"` // proxy | redirection | dead
+	Kind                       string                     `json:"kind,omitempty"` // proxy | static | redirection | dead
 	Domain                     string                     `json:"domain"`
 	Path                       string                     `json:"path,omitempty"`
 	Backend                    string                     `json:"backend"`
@@ -155,6 +155,10 @@ type Site struct {
 	RedirectURL                string                     `json:"redirect_url,omitempty"`
 	RedirectCode               int                        `json:"redirect_code,omitempty"`
 	PreservePath               bool                       `json:"preserve_path,omitempty"`
+	RootPath                   string                     `json:"root_path,omitempty"`
+	StaticMode                 string                     `json:"static_mode,omitempty"` // static | spa
+	IndexFile                  string                     `json:"index_file,omitempty"`
+	DirectoryBrowsing          bool                       `json:"directory_browsing,omitempty"`
 	Headers                    string                     `json:"headers,omitempty"`
 	AccessListID               int                        `json:"access_list_id,omitempty"`
 	Wildcard                   bool                       `json:"wildcard,omitempty"`
@@ -399,6 +403,8 @@ func main() {
 	mux.HandleFunc("/reports/hosts", npmHostReportHandler)
 	mux.HandleFunc("/caddy/proxy-hosts", npmProxyHostsHandler)
 	mux.HandleFunc("/caddy/proxy-hosts/", npmProxyHostItemHandler)
+	mux.HandleFunc("/caddy/static-hosts", npmStaticHostsHandler)
+	mux.HandleFunc("/caddy/static-hosts/", npmStaticHostItemHandler)
 	mux.HandleFunc("/caddy/settings/forward-auth/", npmForwardAuthSettingsHandler)
 	mux.HandleFunc("/caddy/settings/authelia", npmAutheliaSettingsHandler)
 	mux.HandleFunc("/caddy/settings/authentik", npmAuthentikSettingsHandler)
@@ -427,6 +433,8 @@ func main() {
 	mux.HandleFunc("/caddy/notifications/channels/", notificationChannelItemHandler)
 	mux.HandleFunc("/nginx/proxy-hosts", npmProxyHostsHandler)
 	mux.HandleFunc("/nginx/proxy-hosts/", npmProxyHostItemHandler)
+	mux.HandleFunc("/nginx/static-hosts", npmStaticHostsHandler)
+	mux.HandleFunc("/nginx/static-hosts/", npmStaticHostItemHandler)
 	mux.HandleFunc("/nginx/settings/forward-auth/", npmForwardAuthSettingsHandler)
 	mux.HandleFunc("/nginx/settings/authelia", npmAutheliaSettingsHandler)
 	mux.HandleFunc("/nginx/settings/authentik", npmAuthentikSettingsHandler)
@@ -1288,12 +1296,23 @@ func putSite(w http.ResponseWriter, r *http.Request, name string) {
 	if s.Kind == "" {
 		s.Kind = "proxy"
 	}
-	if s.Kind == "proxy" {
+	switch s.Kind {
+	case "proxy":
 		if err := validateSiteProxyConfig(s); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		normalizeSiteProxyConfig(&s)
+	case "static":
+		normalizeSiteStaticConfig(&s)
+		if err := validateSiteStaticConfig(s); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	case "redirection", "dead":
+	default:
+		http.Error(w, "站点类型无效", http.StatusBadRequest)
+		return
 	}
 	if strings.TrimSpace(s.Domain) == "" {
 		http.Error(w, "域名不能为空", http.StatusBadRequest)
@@ -2202,6 +2221,8 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 
 func writeSiteRouteContent(b *strings.Builder, s Site, blockInner string) error {
 	switch s.Kind {
+	case "static":
+		return writeStaticSiteRouteContent(b, s, blockInner)
 	case "redirection":
 		code := s.RedirectCode
 		if code == 0 {
@@ -2248,6 +2269,32 @@ func writeSiteRouteContent(b *strings.Builder, s Site, blockInner string) error 
 	if path != "" {
 		fmt.Fprintf(b, "%s}\n", blockInner)
 	}
+	return nil
+}
+
+func writeStaticSiteRouteContent(b *strings.Builder, s Site, blockInner string) error {
+	mode := normalizeStaticMode(s.StaticMode)
+	rootPath := strings.TrimSpace(s.RootPath)
+	if rootPath == "" {
+		return errors.New("静态站点目录不能为空")
+	}
+	fmt.Fprintf(b, "%sroot * %s\n", blockInner, caddyQuote(rootPath))
+
+	accessList, hasAccessList := accessListByID(s.AccessListID)
+	if hasAccessList {
+		if err := writeAccessListBlock(b, accessList, blockInner); err != nil {
+			return err
+		}
+	}
+
+	if mode == "spa" {
+		fmt.Fprintf(b, "%stry_files {path} {path}/ %s\n", blockInner, caddyQuote(normalizeStaticIndexFile(mode, s.IndexFile)))
+	}
+	if mode == "static" && s.DirectoryBrowsing {
+		fmt.Fprintf(b, "%sfile_server browse\n", blockInner)
+		return nil
+	}
+	fmt.Fprintf(b, "%sfile_server\n", blockInner)
 	return nil
 }
 
@@ -3041,16 +3088,44 @@ func normalizeSiteProxyConfig(s *Site) {
 	}
 }
 
+func normalizeSiteStaticConfig(s *Site) {
+	if s == nil {
+		return
+	}
+	mode := normalizeStaticMode(s.StaticMode)
+	s.RootPath = strings.TrimSpace(s.RootPath)
+	s.StaticMode = mode
+	s.IndexFile = normalizeStaticIndexFile(mode, s.IndexFile)
+	if mode != "static" {
+		s.DirectoryBrowsing = false
+	}
+	s.Backend = ""
+	s.Upstreams = nil
+	s.LoadBalancingPolicy = ""
+	s.Locations = nil
+	s.ReverseProxy = ReverseProxyAdvancedConfig{}
+	s.UpstreamInsecureSkipVerify = false
+	s.ForwardAuth = ForwardAuthConfig{}
+}
+
+func validateHTTPOnlyListenPorts(s Site) error {
+	if !s.NoTLS {
+		return nil
+	}
+	for _, domain := range splitDomains(s.Domain) {
+		if _, port, ok := splitHostListenPort(domain); ok && port == 443 {
+			return errors.New("仅 HTTP 模式不能监听 443；请留空/使用 80，或启用 SSL")
+		}
+	}
+	return nil
+}
+
 func validateSiteProxyConfig(s Site) error {
 	if strings.TrimSpace(s.Backend) == "" && len(s.Upstreams) == 0 {
 		return errors.New("后端地址不能为空")
 	}
-	if s.NoTLS {
-		for _, domain := range splitDomains(s.Domain) {
-			if _, port, ok := splitHostListenPort(domain); ok && port == 443 {
-				return errors.New("仅 HTTP 模式不能监听 443；请留空/使用 80，或启用 SSL")
-			}
-		}
+	if err := validateHTTPOnlyListenPorts(s); err != nil {
+		return err
 	}
 	if err := validateProxyUpstreams(normalizeProxyUpstreams(s.Upstreams, s.Backend), s.LoadBalancingPolicy, "默认上游"); err != nil {
 		return err
@@ -3078,6 +3153,51 @@ func validateSiteProxyConfig(s Site) error {
 			if err := validateReverseProxyAdvancedConfig(loc.ReverseProxy, label+" 反代高级"); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func validateSiteStaticConfig(s Site) error {
+	if err := validateHTTPOnlyListenPorts(s); err != nil {
+		return err
+	}
+	rootPath := strings.TrimSpace(s.RootPath)
+	if rootPath == "" {
+		return errors.New("静态站点目录不能为空")
+	}
+	if hasControlChars(rootPath) {
+		return errors.New("静态站点目录不能包含控制字符")
+	}
+	if !strings.HasPrefix(rootPath, "/") && !filepath.IsAbs(rootPath) {
+		return errors.New("静态站点目录必须是容器内绝对路径，例如 /srv/sites/app")
+	}
+	mode := normalizeStaticMode(s.StaticMode)
+	if mode == "spa" {
+		if err := validateStaticFallbackPath(normalizeStaticIndexFile(mode, s.IndexFile)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateStaticFallbackPath(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("SPA fallback 文件不能为空")
+	}
+	if !strings.HasPrefix(value, "/") {
+		return errors.New("SPA fallback 文件必须以 / 开头")
+	}
+	if hasControlChars(value) || strings.ContainsAny(value, " \t\r\n") {
+		return errors.New("SPA fallback 文件不能包含空白或控制字符")
+	}
+	if strings.ContainsAny(value, "{}") {
+		return errors.New("SPA fallback 文件不能包含 Caddy 占位符")
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return errors.New("SPA fallback 文件不能包含 .. 路径段")
 		}
 	}
 	return nil
@@ -5116,6 +5236,32 @@ type npmProxyHost struct {
 	AccessList                 *npmAccessList             `json:"access_list,omitempty"`
 }
 
+type npmStaticHost struct {
+	ID                int             `json:"id"`
+	CreatedOn         string          `json:"created_on"`
+	ModifiedOn        string          `json:"modified_on"`
+	OwnerUserID       int             `json:"owner_user_id"`
+	ServiceName       string          `json:"service_name,omitempty"`
+	DomainNames       []string        `json:"domain_names"`
+	ListenPort        int             `json:"listen_port"`
+	ListenPorts       []int           `json:"listen_ports,omitempty"`
+	RootPath          string          `json:"root_path"`
+	Mode              string          `json:"mode"`
+	IndexFile         string          `json:"index_file,omitempty"`
+	DirectoryBrowsing bool            `json:"directory_browsing"`
+	AccessListID      int             `json:"access_list_id"`
+	CertificateID     any             `json:"certificate_id"`
+	SSLForced         bool            `json:"ssl_forced"`
+	Meta              map[string]any  `json:"meta"`
+	HTTP2Support      bool            `json:"http2_support"`
+	Enabled           bool            `json:"enabled"`
+	HSTSEnabled       bool            `json:"hsts_enabled"`
+	HSTSSubdomains    bool            `json:"hsts_subdomains"`
+	Owner             npmUser         `json:"owner,omitempty"`
+	Certificate       *npmCertificate `json:"certificate,omitempty"`
+	AccessList        *npmAccessList  `json:"access_list,omitempty"`
+}
+
 type npmCertificate struct {
 	ID               int                  `json:"id"`
 	CreatedOn        string               `json:"created_on"`
@@ -5128,6 +5274,7 @@ type npmCertificate struct {
 	Meta             map[string]any       `json:"meta"`
 	Owner            npmUser              `json:"owner,omitempty"`
 	ProxyHosts       []npmProxyHost       `json:"proxy_hosts,omitempty"`
+	StaticHosts      []npmStaticHost      `json:"static_hosts,omitempty"`
 	RedirectionHosts []npmRedirectionHost `json:"redirection_hosts,omitempty"`
 	DeadHosts        []npmDeadHost        `json:"dead_hosts,omitempty"`
 	Streams          []npmStream          `json:"streams,omitempty"`
@@ -5612,9 +5759,11 @@ func npmHostReportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	streams, _ := loadNPMStreams()
-	counts := map[string]int{"proxy": 0, "redirection": 0, "stream": len(streams), "dead": 0}
+	counts := map[string]int{"proxy": 0, "static": 0, "redirection": 0, "stream": len(streams), "dead": 0}
 	for _, s := range sites {
 		switch s.Kind {
+		case "static":
+			counts["static"]++
 		case "redirection":
 			counts["redirection"]++
 		case "dead":
@@ -5834,6 +5983,56 @@ func npmProxyHostItemHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func npmStaticHostsHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		sites, err := readSitesByKind("static")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		certByDomain := npmCertificatesByDomain()
+		out := make([]npmStaticHost, 0, len(sites))
+		for _, s := range sites {
+			out = append(out, siteToNPMStaticHost(s, certByDomain))
+		}
+		sortByModifiedOnDesc(out, func(item npmStaticHost) (string, string) { return item.ModifiedOn, item.CreatedOn })
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPost:
+		var item npmStaticHost
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		item.Enabled = true
+		s, err := npmStaticHostToSite(item, "")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := saveSiteFromNPM(s); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		appendAuditLog("static-host", stableID(s.Name), "created", siteAuditMeta(s))
+		writeJSON(w, http.StatusCreated, siteToNPMStaticHost(s, npmCertificatesByDomain()))
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func npmStaticHostItemHandler(w http.ResponseWriter, r *http.Request) {
+	handleSiteBackedItem(w, r, trimAnyPrefix(r.URL.Path, "/caddy/static-hosts/", "/nginx/static-hosts/"), "static", func(s Site) any {
+		return siteToNPMStaticHost(s, npmCertificatesByDomain())
+	}, func(r *http.Request, existing string) (Site, error) {
+		var item npmStaticHost
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			return Site{}, err
+		}
+		return npmStaticHostToSite(item, existing)
+	})
 }
 
 func npmRedirectionHostsHandler(w http.ResponseWriter, r *http.Request) {
@@ -7625,6 +7824,114 @@ func npmHostCertificateStateToSite(certificateID any, domainNames []string, meta
 	return challenge, credentialID, certificateMode, bindings, nil
 }
 
+func normalizeStaticMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "spa":
+		return "spa"
+	default:
+		return "static"
+	}
+}
+
+func normalizeStaticIndexFile(mode string, value string) string {
+	value = strings.TrimSpace(value)
+	if normalizeStaticMode(mode) == "spa" && value == "" {
+		return "/index.html"
+	}
+	return value
+}
+
+func siteToNPMStaticHost(s Site, certByDomain map[string]npmCertificate) npmStaticHost {
+	defaultListenPort := 443
+	if s.NoTLS {
+		defaultListenPort = 80
+	}
+	domains, listenPort, listenPorts := splitNPMListenDomains(s.Domain, defaultListenPort)
+	certID, cert, bindings := siteToNPMHostCertificateState(s, domains, certByDomain)
+	var accessList *npmAccessList
+	if s.AccessListID > 0 {
+		if item, ok := accessListByID(s.AccessListID); ok {
+			accessList = &item
+		}
+	}
+	mode := normalizeStaticMode(s.StaticMode)
+	lastError, lastErrorAt := proxyHostVisibleCertError(s)
+	return npmStaticHost{
+		ID:                stableID(s.Name),
+		CreatedOn:         defaultString(s.CreatedOn, seedTimestamp()),
+		ModifiedOn:        defaultString(s.ModifiedOn, defaultString(s.CreatedOn, seedTimestamp())),
+		OwnerUserID:       1,
+		ServiceName:       s.ServiceName,
+		DomainNames:       domains,
+		ListenPort:        listenPort,
+		ListenPorts:       listenPorts,
+		RootPath:          strings.TrimSpace(s.RootPath),
+		Mode:              mode,
+		IndexFile:         normalizeStaticIndexFile(mode, s.IndexFile),
+		DirectoryBrowsing: mode == "static" && s.DirectoryBrowsing,
+		AccessListID:      s.AccessListID,
+		CertificateID:     certID,
+		SSLForced:         !s.NoTLS,
+		Meta: mergeMeta(map[string]any{
+			"caddy_name":           s.Name,
+			"challenge_pref":       s.ChallengePref,
+			"wildcard":             s.Wildcard,
+			"credential_id":        s.CredentialID,
+			"certificate_mode":     s.CertificateMode,
+			"certificate_bindings": bindings,
+			"last_error":           lastError,
+			"last_error_at":        lastErrorAt,
+		}, issuerMeta(s.Issuer)),
+		HTTP2Support:   true,
+		Enabled:        !s.Disabled,
+		HSTSEnabled:    s.HSTSEnabled,
+		HSTSSubdomains: s.HSTSSubdomains,
+		Owner:          localNPMUser,
+		Certificate:    cert,
+		AccessList:     accessList,
+	}
+}
+
+func npmStaticHostToSite(item npmStaticHost, existingName string) (Site, error) {
+	challenge, credentialID, certificateMode, bindings, err := npmHostCertificateStateToSite(item.CertificateID, item.DomainNames, item.Meta)
+	if err != nil {
+		return Site{}, err
+	}
+	issuer, _ := issuerFromNPM("", item.Meta)
+	wildcard := metaBool(item.Meta, "wildcard", "Wildcard")
+	mode := normalizeStaticMode(item.Mode)
+	site := Site{
+		CreatedOn:           strings.TrimSpace(item.CreatedOn),
+		ModifiedOn:          strings.TrimSpace(item.ModifiedOn),
+		Name:                defaultString(existingName, "static-"+uniqueSiteName(firstDomain(item.DomainNames))),
+		ServiceName:         strings.TrimSpace(item.ServiceName),
+		Kind:                "static",
+		Domain:              joinListenDomainsWithPorts(item.DomainNames, item.ListenPort, item.ListenPorts),
+		RootPath:            strings.TrimSpace(item.RootPath),
+		StaticMode:          mode,
+		IndexFile:           normalizeStaticIndexFile(mode, item.IndexFile),
+		DirectoryBrowsing:   mode == "static" && item.DirectoryBrowsing,
+		AccessListID:        item.AccessListID,
+		NoTLS:               !item.SSLForced,
+		Wildcard:            wildcard,
+		ChallengePref:       challenge,
+		CredentialID:        credentialID,
+		CertificateMode:     certificateMode,
+		CertificateBindings: bindings,
+		Issuer:              issuer,
+		HSTSEnabled:         item.HSTSEnabled,
+		HSTSSubdomains:      item.HSTSSubdomains,
+		Disabled:            !item.Enabled,
+	}
+	if site.Wildcard {
+		applyWildcardCertificateConfigToSite(&site)
+		site.CertificateBindings = canonicalizeWildcardCertificateBindings(site, item.DomainNames, site.CertificateBindings, npmCertificatesByDomain())
+	} else {
+		applyCertificateConfigToSite(&site, item.CertificateID)
+	}
+	return site, nil
+}
+
 func siteToNPMRedirectionHost(s Site, certByDomain map[string]npmCertificate) npmRedirectionHost {
 	domains := splitDomains(s.Domain)
 	certID, cert, bindings := siteToNPMHostCertificateState(s, domains, certByDomain)
@@ -7966,6 +8273,7 @@ func populateCertificateUsage(certs []npmCertificate) {
 	byID := map[int]*npmCertificate{}
 	for i := range certs {
 		certs[i].ProxyHosts = []npmProxyHost{}
+		certs[i].StaticHosts = []npmStaticHost{}
 		certs[i].RedirectionHosts = []npmRedirectionHost{}
 		certs[i].DeadHosts = []npmDeadHost{}
 		certs[i].Streams = []npmStream{}
@@ -7988,6 +8296,20 @@ func populateCertificateUsage(certs []npmCertificate) {
 				hostForCert := host
 				hostForCert.Certificate = nil
 				cert.ProxyHosts = append(cert.ProxyHosts, hostForCert)
+			}
+		}
+	}
+	if sites, err := readSitesByKind("static"); err == nil {
+		for _, s := range sites {
+			host := siteToNPMStaticHost(s, certByDomain)
+			for _, id := range certificateUsageIDs(host.CertificateID, host.Certificate, host.Meta) {
+				cert, ok := byID[id]
+				if !ok {
+					continue
+				}
+				hostForCert := host
+				hostForCert.Certificate = nil
+				cert.StaticHosts = append(cert.StaticHosts, hostForCert)
 			}
 		}
 	}
@@ -8434,7 +8756,7 @@ func loadNPMAccessLists() ([]npmAccessList, error) {
 
 func accessListProxyHostCounts() map[int]int {
 	counts := map[int]int{}
-	sites, err := readSitesByKind("proxy")
+	sites, err := readAllSites()
 	if err != nil {
 		return counts
 	}
@@ -10436,6 +10758,7 @@ func siteAuditMeta(s Site) map[string]any {
 		"domainNames":  splitDomains(s.Domain),
 		"kind":         defaultString(s.Kind, "proxy"),
 		"backend":      s.Backend,
+		"root_path":    s.RootPath,
 		"redirect_url": s.RedirectURL,
 		"accessListID": s.AccessListID,
 	}

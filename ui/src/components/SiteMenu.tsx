@@ -99,6 +99,10 @@ const menuItems: MenuItem[] = [
 				label: "proxy-hosts",
 			},
 			{
+				to: "/caddy/static",
+				label: "static-hosts",
+			},
+			{
 				to: "/caddy/redirection",
 				label: "redirection-hosts",
 			},

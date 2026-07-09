@@ -1,9 +1,9 @@
-import { IconArrowsCross, IconBolt, IconBoltOff, IconDisc } from "@tabler/icons-react";
+import { IconArrowsCross, IconBolt, IconBoltOff, IconDisc, IconFolder } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { HasPermission } from "src/components";
 import { useHostReport } from "src/hooks";
 import { T } from "src/locale";
-import { DEAD_HOSTS, PROXY_HOSTS, REDIRECTION_HOSTS, STREAMS, VIEW } from "src/modules/Permissions";
+import { DEAD_HOSTS, PROXY_HOSTS, REDIRECTION_HOSTS, STATIC_HOSTS, STREAMS, VIEW } from "src/modules/Permissions";
 
 const Dashboard = () => {
 	const { data: hostReport } = useHostReport();
@@ -37,6 +37,33 @@ const Dashboard = () => {
 											<div className="col">
 												<div className="font-weight-medium">
 													<T id="proxy-hosts.count" data={{ count: hostReport?.proxy }} />
+												</div>
+											</div>
+										</div>
+									</div>
+								</a>
+							</div>
+						</HasPermission>
+						<HasPermission section={STATIC_HOSTS} permission={VIEW} hideError>
+							<div className="col-sm-6 col-lg-3">
+								<a
+									href="/caddy/static"
+									className="card card-sm card-link card-link-pop dashboard-card"
+									onClick={(e) => {
+										e.preventDefault();
+										navigate("/caddy/static");
+									}}
+								>
+									<div className="card-body">
+										<div className="row align-items-center">
+											<div className="col-auto">
+												<span className="bg-cyan text-white avatar">
+													<IconFolder />
+												</span>
+											</div>
+											<div className="col">
+												<div className="font-weight-medium">
+													<T id="static-hosts.count" data={{ count: hostReport?.static }} />
 												</div>
 											</div>
 										</div>

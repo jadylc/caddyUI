@@ -17,6 +17,7 @@ const Certificates = lazy(() => import("src/pages/Certificates"));
 const Access = lazy(() => import("src/pages/Access"));
 const AuditLog = lazy(() => import("src/pages/AuditLog"));
 const ProxyHosts = lazy(() => import("src/pages/Nginx/ProxyHosts"));
+const StaticHosts = lazy(() => import("src/pages/Nginx/StaticHosts"));
 const RedirectionHosts = lazy(() => import("src/pages/Nginx/RedirectionHosts"));
 const DeadHosts = lazy(() => import("src/pages/Nginx/DeadHosts"));
 const Streams = lazy(() => import("src/pages/Nginx/Streams"));
@@ -60,12 +61,14 @@ function Router() {
 							<Route path="/settings/notifications" element={<NotificationSettings />} />
 							<Route path="/settings/system" element={<SystemSettings />} />
 							<Route path="/caddy/proxy" element={<ProxyHosts />} />
+							<Route path="/caddy/static" element={<StaticHosts />} />
 							<Route path="/caddy/redirection" element={<RedirectionHosts />} />
 							<Route path="/caddy/404" element={<DeadHosts />} />
 							<Route path="/caddy/stream" element={<Streams />} />
 							<Route path="/caddy/dynamic-dns" element={<DynamicDNS />} />
 							<Route path="/caddy/domain-monitor" element={<DomainMonitor />} />
 							<Route path="/nginx/proxy" element={<Navigate to="/caddy/proxy" replace />} />
+							<Route path="/nginx/static" element={<Navigate to="/caddy/static" replace />} />
 							<Route path="/nginx/redirection" element={<Navigate to="/caddy/redirection" replace />} />
 							<Route path="/nginx/404" element={<Navigate to="/caddy/404" replace />} />
 							<Route path="/nginx/stream" element={<Navigate to="/caddy/stream" replace />} />

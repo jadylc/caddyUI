@@ -938,6 +938,15 @@
   "proxy-hosts.count": {
     "defaultMessage": "{count} 个代理服务"
   },
+  "static-host": {
+    "defaultMessage": "静态站点"
+  },
+  "static-hosts": {
+    "defaultMessage": "静态站点列表"
+  },
+  "static-hosts.count": {
+    "defaultMessage": "{count} 个静态站点"
+  },
   "public": {
     "defaultMessage": "公开"
   },

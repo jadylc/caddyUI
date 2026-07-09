@@ -3,6 +3,7 @@ import type { UserPermissions } from "src/api/backend";
 export const ADMIN = "admin";
 export const VISIBILITY = "visibility";
 export const PROXY_HOSTS = "proxyHosts";
+export const STATIC_HOSTS = "staticHosts";
 export const REDIRECTION_HOSTS = "redirectionHosts";
 export const DEAD_HOSTS = "deadHosts";
 export const STREAMS = "streams";
@@ -20,6 +21,7 @@ export type Section =
 	| typeof ADMIN
 	| typeof VISIBILITY
 	| typeof PROXY_HOSTS
+	| typeof STATIC_HOSTS
 	| typeof REDIRECTION_HOSTS
 	| typeof DEAD_HOSTS
 	| typeof STREAMS

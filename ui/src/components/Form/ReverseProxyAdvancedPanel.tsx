@@ -282,7 +282,7 @@ function HeaderRules({ name, label }: { name: string; label: string }) {
 	return (
 		<div className="mb-3">
 			<div className="d-flex align-items-center justify-content-between mb-2">
-				<label className="form-label m-0">{label}</label>
+				<div className="form-label m-0">{label}</div>
 				<button
 					type="button"
 					className="btn btn-sm"

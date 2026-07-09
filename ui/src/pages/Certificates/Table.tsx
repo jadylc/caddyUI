@@ -194,6 +194,7 @@ export default function Table({ data, isFetching, onDelete, onEdit, onRenew, onD
 					return (
 						<CertificateInUseFormatter
 							proxyHosts={r.proxyHosts}
+							staticHosts={r.staticHosts}
 							redirectionHosts={r.redirectionHosts}
 							deadHosts={r.deadHosts}
 							streams={r.streams}
