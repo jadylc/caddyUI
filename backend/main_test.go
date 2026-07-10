@@ -77,7 +77,9 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 	oldCaddyAdmin := caddyAdmin
 	oldCaddyCertsDir := caddyCertsDir
 	oldAuditLogPath := auditLogPath
+	oldAccessLogDir := accessLogDir
 	sitesDir = filepath.Join(dir, "sites")
+	accessLogDir = filepath.Join(dir, "access-logs")
 	credentialPath = filepath.Join(dir, "credentials.json")
 	issuerCredentialPath = filepath.Join(dir, "issuer-credentials.json")
 	accessListPath = filepath.Join(dir, "access-lists.json")
@@ -88,6 +90,9 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 	auditLogPath = filepath.Join(dir, "audit-log.json")
 	if err := os.MkdirAll(sitesDir, 0755); err != nil {
 		t.Fatalf("MkdirAll sitesDir error = %v", err)
+	}
+	if err := os.MkdirAll(accessLogDir, 0755); err != nil {
+		t.Fatalf("MkdirAll accessLogDir error = %v", err)
 	}
 	if err := os.WriteFile(caddyfile, []byte("{\n    auto_https off\n}\n"), 0644); err != nil {
 		t.Fatalf("WriteFile Caddyfile error = %v", err)
@@ -103,6 +108,7 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 		caddyAdmin = oldCaddyAdmin
 		caddyCertsDir = oldCaddyCertsDir
 		auditLogPath = oldAuditLogPath
+		accessLogDir = oldAccessLogDir
 	})
 }
 
@@ -1881,6 +1887,70 @@ func TestRenderSiteSupportsReverseProxyAdvancedConfig(t *testing.T) {
 	}
 }
 
+func TestRenderSiteSupportsResponseOptimization(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:    "optimized",
+		Domain:  "optimized.example.com",
+		Backend: "http://127.0.0.1:8080",
+		NoTLS:   true,
+		Response: ResponseOptimizationConfig{
+			CompressionEnabled:     true,
+			CacheControlEnabled:    true,
+			CacheControlValue:      "public, max-age=300",
+			SecurityHeadersEnabled: true,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"encode gzip zstd",
+		"header {",
+		`Cache-Control "public, max-age=300"`,
+		`X-Content-Type-Options "nosniff"`,
+		`Referrer-Policy "strict-origin-when-cross-origin"`,
+		`X-Frame-Options "SAMEORIGIN"`,
+		`Permissions-Policy "geolocation=(), microphone=(), camera=()"`,
+		"reverse_proxy http://127.0.0.1:8080",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+}
+
+func TestRenderSiteSupportsAccessLog(t *testing.T) {
+	conf, err := renderSite(Site{
+		Name:    "logged",
+		Domain:  "logged.example.com",
+		Backend: "http://127.0.0.1:8080",
+		NoTLS:   true,
+		AccessLog: AccessLogConfig{
+			Enabled:      true,
+			Format:       "json",
+			OutputFile:   "/config/access-logs/logged.log",
+			RollSize:     "20MiB",
+			RollKeep:     7,
+			RollKeepDays: 14,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"log {",
+		`output file "/config/access-logs/logged.log" {`,
+		"roll_size 20MiB",
+		"roll_keep 7",
+		"roll_keep_for 336h",
+		"format json",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+}
+
 func TestRenderSiteSupportsMultipleUpstreamsAndLoadBalancingPolicy(t *testing.T) {
 	conf, err := renderSite(Site{
 		Name:                "multi-upstream",
@@ -1981,6 +2051,66 @@ func TestNPMProxyHostRoundTripsMultipleUpstreams(t *testing.T) {
 	out := siteToNPMProxyHost(site, nil)
 	if out.ForwardHost != "10.0.0.1" || len(out.Upstreams) != 2 || out.Upstreams[0].Weight != 2 || out.LoadBalancingPolicy != "least_conn" {
 		t.Fatalf("round-trip proxy host = %#v", out)
+	}
+}
+
+func TestNPMProxyHostRoundTripsResponseOptimization(t *testing.T) {
+	host := npmProxyHost{
+		DomainNames:   []string{"app.example.com"},
+		ForwardScheme: "http",
+		ForwardHost:   "127.0.0.1",
+		ForwardPort:   8080,
+		SSLForced:     false,
+		Enabled:       true,
+		Meta:          map[string]any{},
+		Response: ResponseOptimizationConfig{
+			CompressionEnabled:     true,
+			CacheControlEnabled:    true,
+			CacheControlValue:      "public, max-age=600",
+			SecurityHeadersEnabled: true,
+		},
+	}
+	site, err := npmProxyHostToSite(host, "app")
+	if err != nil {
+		t.Fatalf("npmProxyHostToSite error = %v", err)
+	}
+	if !site.Response.CompressionEnabled || site.Response.CacheControlValue != "public, max-age=600" || !site.Response.SecurityHeadersEnabled {
+		t.Fatalf("site response = %#v", site.Response)
+	}
+	out := siteToNPMProxyHost(site, nil)
+	if !out.Response.CompressionEnabled || out.Response.CacheControlValue != "public, max-age=600" || !out.Response.SecurityHeadersEnabled {
+		t.Fatalf("round-trip proxy host response = %#v", out.Response)
+	}
+}
+
+func TestNPMProxyHostRoundTripsAccessLog(t *testing.T) {
+	host := npmProxyHost{
+		DomainNames:   []string{"app.example.com"},
+		ForwardScheme: "http",
+		ForwardHost:   "127.0.0.1",
+		ForwardPort:   8080,
+		SSLForced:     false,
+		Enabled:       true,
+		Meta:          map[string]any{},
+		AccessLog: AccessLogConfig{
+			Enabled:      true,
+			Format:       "console",
+			OutputFile:   "/config/access-logs/app.log",
+			RollSize:     "50MiB",
+			RollKeep:     5,
+			RollKeepDays: 10,
+		},
+	}
+	site, err := npmProxyHostToSite(host, "app")
+	if err != nil {
+		t.Fatalf("npmProxyHostToSite error = %v", err)
+	}
+	if !site.AccessLog.Enabled || site.AccessLog.Format != "console" || site.AccessLog.OutputFile != "/config/access-logs/app.log" {
+		t.Fatalf("site access log = %#v", site.AccessLog)
+	}
+	out := siteToNPMProxyHost(site, nil)
+	if !out.AccessLog.Enabled || out.AccessLog.RollSize != "50MiB" || out.AccessLog.RollKeepDays != 10 {
+		t.Fatalf("round-trip proxy host access log = %#v", out.AccessLog)
 	}
 }
 
@@ -3151,6 +3281,17 @@ func TestNPMStaticHostRoundTripsSiteConfig(t *testing.T) {
 		AccessListID:      123,
 		SSLForced:         false,
 		Enabled:           true,
+		Response: ResponseOptimizationConfig{
+			CompressionEnabled:  true,
+			CacheControlEnabled: true,
+			CacheControlValue:   "public, max-age=3600",
+		},
+		AccessLog: AccessLogConfig{
+			Enabled:    true,
+			OutputFile: "/config/access-logs/docs.log",
+			RollSize:   "10MiB",
+			RollKeep:   10,
+		},
 	}
 	site, err := npmStaticHostToSite(host, "docs")
 	if err != nil {
@@ -3165,6 +3306,12 @@ func TestNPMStaticHostRoundTripsSiteConfig(t *testing.T) {
 	if site.AccessListID != 123 || !site.NoTLS || site.Disabled {
 		t.Fatalf("site access/tls/enabled = access %d noTLS %v disabled %v", site.AccessListID, site.NoTLS, site.Disabled)
 	}
+	if !site.Response.CompressionEnabled || site.Response.CacheControlValue != "public, max-age=3600" {
+		t.Fatalf("site response = %#v", site.Response)
+	}
+	if !site.AccessLog.Enabled || site.AccessLog.OutputFile != "/config/access-logs/docs.log" {
+		t.Fatalf("site access log = %#v", site.AccessLog)
+	}
 
 	out := siteToNPMStaticHost(site, nil)
 	if out.Mode != "spa" || out.IndexFile != "/index.html" || out.DirectoryBrowsing {
@@ -3172,6 +3319,12 @@ func TestNPMStaticHostRoundTripsSiteConfig(t *testing.T) {
 	}
 	if out.ListenPort != 8080 || len(out.ListenPorts) != 2 || out.ListenPorts[1] != 8081 {
 		t.Fatalf("out listen = %d %#v, want 8080 [8080 8081]", out.ListenPort, out.ListenPorts)
+	}
+	if !out.Response.CompressionEnabled || out.Response.CacheControlValue != "public, max-age=3600" {
+		t.Fatalf("out response = %#v", out.Response)
+	}
+	if !out.AccessLog.Enabled || out.AccessLog.OutputFile != "/config/access-logs/docs.log" {
+		t.Fatalf("out access log = %#v", out.AccessLog)
 	}
 }
 
@@ -3191,6 +3344,14 @@ func TestValidateSiteStaticConfigRejectsInvalidConfig(t *testing.T) {
 		{
 			name: "bad spa fallback",
 			site: Site{Kind: "static", Domain: "app.example.com", RootPath: "/srv/app", StaticMode: "spa", IndexFile: "../index.html"},
+		},
+		{
+			name: "bad cache control",
+			site: Site{Kind: "static", Domain: "app.example.com", RootPath: "/srv/app", StaticMode: "static", Response: ResponseOptimizationConfig{CacheControlEnabled: true, CacheControlValue: "public\r\nbad"}},
+		},
+		{
+			name: "bad access log path",
+			site: Site{Kind: "static", Domain: "app.example.com", RootPath: "/srv/app", StaticMode: "static", AccessLog: AccessLogConfig{Enabled: true, OutputFile: "/etc/passwd"}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3225,6 +3386,7 @@ func TestNPMStaticHostCreateRendersStaticConfig(t *testing.T) {
 	}))
 	defer adminServer.Close()
 	caddyAdmin = adminServer.URL
+	accessLogPath := filepath.ToSlash(filepath.Join(accessLogDir, "docs.log"))
 
 	body, err := json.Marshal(npmStaticHost{
 		ServiceName: "Docs",
@@ -3238,6 +3400,19 @@ func TestNPMStaticHostCreateRendersStaticConfig(t *testing.T) {
 		SSLForced:    false,
 		AccessListID: 0,
 		Enabled:      true,
+		Response: ResponseOptimizationConfig{
+			CompressionEnabled:     true,
+			CacheControlEnabled:    true,
+			CacheControlValue:      "public, max-age=3600",
+			SecurityHeadersEnabled: true,
+		},
+		AccessLog: AccessLogConfig{
+			Enabled:      true,
+			OutputFile:   accessLogPath,
+			RollSize:     "10MiB",
+			RollKeep:     3,
+			RollKeepDays: 7,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Marshal error = %v", err)
@@ -3273,10 +3448,59 @@ func TestNPMStaticHostCreateRendersStaticConfig(t *testing.T) {
 		`root * "/srv/sites/docs"`,
 		`try_files {path} {path}/ "/app.html"`,
 		"file_server",
+		"encode gzip zstd",
+		`Cache-Control "public, max-age=3600"`,
+		`X-Content-Type-Options "nosniff"`,
+		"output file " + caddyQuote(accessLogPath) + " {",
+		"roll_keep 3",
+		"roll_keep_for 168h",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Fatalf("conf = %q, want %q", conf, want)
 		}
+	}
+}
+
+func TestSiteAccessLogHandlerReadsAndDownloadsLog(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+	logPath := filepath.Join(accessLogDir, "app.log")
+	if err := os.WriteFile(logPath, []byte("one\ntwo\nthree\n"), 0644); err != nil {
+		t.Fatalf("WriteFile log error = %v", err)
+	}
+	site := Site{
+		Name:   "app",
+		Domain: "app.example.com",
+		AccessLog: AccessLogConfig{
+			Enabled:    true,
+			OutputFile: filepath.ToSlash(logPath),
+			RollSize:   "10MiB",
+			RollKeep:   10,
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/caddy/proxy-hosts/1/logs?n=2", nil)
+	handleSiteAccessLogRequest(rr, req, site, "proxy-host")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rr.Code, rr.Body.String())
+	}
+	var payload siteAccessLogPayload
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal payload error = %v", err)
+	}
+	if !payload.Enabled || len(payload.Lines) != 2 || payload.Lines[0] != "two" || payload.Lines[1] != "three" {
+		t.Fatalf("payload = %#v", payload)
+	}
+
+	downloadRR := httptest.NewRecorder()
+	downloadReq := httptest.NewRequest(http.MethodGet, "/caddy/proxy-hosts/1/logs/download", nil)
+	handleSiteAccessLogRequest(downloadRR, downloadReq, site, "proxy-host")
+	if downloadRR.Code != http.StatusOK {
+		t.Fatalf("download status = %d body = %s, want 200", downloadRR.Code, downloadRR.Body.String())
+	}
+	if !strings.Contains(downloadRR.Body.String(), "one\ntwo\nthree") {
+		t.Fatalf("download body = %q", downloadRR.Body.String())
 	}
 }
 

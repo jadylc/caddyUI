@@ -1,4 +1,4 @@
-import { IconCopy, IconDotsVertical, IconEdit, IconPower, IconTrash } from "@tabler/icons-react";
+import { IconCopy, IconDotsVertical, IconEdit, IconFileText, IconPower, IconTrash } from "@tabler/icons-react";
 import {
 	createColumnHelper,
 	getCoreRowModel,
@@ -30,6 +30,7 @@ interface Props {
 	onCopy?: (host: StaticHost) => void;
 	onDelete?: (id: number) => void;
 	onDisableToggle?: (id: number, enabled: boolean) => void;
+	onAccessLog?: (host: StaticHost) => void;
 	onNew?: () => void;
 }
 
@@ -65,6 +66,7 @@ export default function Table({
 	onCopy,
 	onDelete,
 	onDisableToggle,
+	onAccessLog,
 	onNew,
 	isFiltered,
 }: Props) {
@@ -230,6 +232,17 @@ export default function Table({
 									<IconEdit size={16} />
 									<T id="action.edit" />
 								</a>
+								<a
+									className="dropdown-item"
+									href="#"
+									onClick={(e) => {
+										e.preventDefault();
+										onAccessLog?.(info.row.original);
+									}}
+								>
+									<IconFileText size={16} />
+									查看日志
+								</a>
 								<HasPermission section={STATIC_HOSTS} permission={MANAGE} hideError>
 									<a
 										className="dropdown-item"
@@ -275,7 +288,7 @@ export default function Table({
 				},
 			}),
 		],
-		[columnHelper, onEdit, onCopy, onDisableToggle, onDelete],
+		[columnHelper, onEdit, onCopy, onAccessLog, onDisableToggle, onDelete],
 	);
 
 	const [sorting, setSorting] = useState<SortingState>([]);

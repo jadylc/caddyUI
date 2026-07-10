@@ -1,4 +1,5 @@
 export * from "./AccessClientFields";
+export * from "./AccessLogFields";
 export * from "./AccessField";
 export * from "./BasicAuthFields";
 export * from "./CertificateAuthorityFields";
@@ -7,6 +8,7 @@ export * from "./DomainCertificateBindingsField";
 export * from "./DomainNamesField";
 export * from "./LocationsFields";
 export * from "./ReverseProxyAdvancedPanel";
+export * from "./ResponseOptimizationFields";
 export * from "./SSLCertificateField";
 export * from "./SSLOptionsFields";
 export * from "./UpstreamsFields";

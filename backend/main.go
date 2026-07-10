@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -57,6 +58,7 @@ var (
 	trustedProxiesConfPath    = "/etc/caddy/global.d/trusted-proxies.conf"
 	customCertMeta            = "/config/custom-certs.json"
 	customCertsDir            = "/config/custom-certs"
+	accessLogDir              = "/config/access-logs"
 	auditLogPath              = "/config/audit-log.json"
 	caddyfile                 = "/etc/caddy/Caddyfile"
 	legacyAcmeFile            = "/etc/caddy/global.d/acme.conf"
@@ -176,9 +178,27 @@ type Site struct {
 	TrustForwardedProto        bool                       `json:"trust_forwarded_proto,omitempty"`
 	UpstreamInsecureSkipVerify bool                       `json:"upstream_insecure_skip_verify,omitempty"`
 	ReverseProxy               ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
+	Response                   ResponseOptimizationConfig `json:"response,omitempty"`
+	AccessLog                  AccessLogConfig            `json:"access_log,omitempty"`
 	Disabled                   bool                       `json:"disabled,omitempty"`
 	LastError                  string                     `json:"last_error,omitempty"`
 	LastErrorAt                time.Time                  `json:"last_error_at,omitempty"`
+}
+
+type ResponseOptimizationConfig struct {
+	CompressionEnabled     bool   `json:"compression_enabled,omitempty"`
+	CacheControlEnabled    bool   `json:"cache_control_enabled,omitempty"`
+	CacheControlValue      string `json:"cache_control_value,omitempty"`
+	SecurityHeadersEnabled bool   `json:"security_headers_enabled,omitempty"`
+}
+
+type AccessLogConfig struct {
+	Enabled      bool   `json:"enabled,omitempty"`
+	Format       string `json:"format,omitempty"`
+	OutputFile   string `json:"output_file,omitempty"`
+	RollSize     string `json:"roll_size,omitempty"`
+	RollKeep     int    `json:"roll_keep,omitempty"`
+	RollKeepDays int    `json:"roll_keep_days,omitempty"`
 }
 
 type ReverseProxyAdvancedConfig struct {
@@ -303,6 +323,7 @@ var forwardAuthProviderSpecs = map[string]forwardAuthProviderSpec{
 
 var headerNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var reverseProxyStatusRe = regexp.MustCompile(`^[1-5][0-9]{2}$`)
+var accessLogRollSizeRe = regexp.MustCompile(`^[1-9][0-9]*(B|KB|MB|GB|KiB|MiB|GiB)?$`)
 
 type CertificateBinding struct {
 	Domain            string       `json:"domain"`
@@ -377,7 +398,7 @@ func main() {
 
 	applyEnvOverrides()
 
-	for _, d := range []string{sitesDir, filepath.Dir(legacyAcmeFile), filepath.Dir(logFile), filepath.Dir(layer4ConfPath), filepath.Dir(dynamicDNSConfPath)} {
+	for _, d := range []string{sitesDir, accessLogDir, filepath.Dir(legacyAcmeFile), filepath.Dir(logFile), filepath.Dir(layer4ConfPath), filepath.Dir(dynamicDNSConfPath)} {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			log.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -2113,6 +2134,22 @@ type renderSiteOptions struct {
 	UseWildcardSiteAddress bool
 }
 
+const defaultCacheControlValue = "public, max-age=3600"
+const defaultAccessLogFormat = "json"
+const defaultAccessLogRollSize = "10MiB"
+const defaultAccessLogRollKeep = 10
+const defaultAccessLogRollKeepDays = 30
+
+var commonSecurityResponseHeaders = []struct {
+	Name  string
+	Value string
+}{
+	{Name: "X-Content-Type-Options", Value: "nosniff"},
+	{Name: "Referrer-Policy", Value: "strict-origin-when-cross-origin"},
+	{Name: "X-Frame-Options", Value: "SAMEORIGIN"},
+	{Name: "Permissions-Policy", Value: "geolocation=(), microphone=(), camera=()"},
+}
+
 type namedSite struct {
 	BaseName string
 	Site     Site
@@ -2202,6 +2239,11 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 	}
 	closeHostScope()
 
+	if siteSupportsResponseOptimization(s) {
+		writeResponseOptimizationDirectives(&b, s.Response, blockInner)
+		writeAccessLogDirective(&b, s, blockInner)
+	}
+
 	if s.HSTSEnabled && !s.NoTLS {
 		hstsValue := "max-age=31536000"
 		if s.HSTSSubdomains {
@@ -2217,6 +2259,58 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 
 	b.WriteString("}\n")
 	return b.String(), nil
+}
+
+func siteSupportsResponseOptimization(s Site) bool {
+	kind := strings.TrimSpace(s.Kind)
+	return kind == "" || kind == "proxy" || kind == "static"
+}
+
+func writeResponseOptimizationDirectives(b *strings.Builder, cfg ResponseOptimizationConfig, indent string) {
+	cfg = normalizeResponseOptimizationConfig(cfg)
+	if cfg.CompressionEnabled {
+		fmt.Fprintf(b, "%sencode gzip zstd\n", indent)
+	}
+
+	headers := []struct {
+		Name  string
+		Value string
+	}{}
+	if cfg.CacheControlEnabled {
+		headers = append(headers, struct {
+			Name  string
+			Value string
+		}{Name: "Cache-Control", Value: cfg.CacheControlValue})
+	}
+	if cfg.SecurityHeadersEnabled {
+		headers = append(headers, commonSecurityResponseHeaders...)
+	}
+	if len(headers) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "%sheader {\n", indent)
+	for _, header := range headers {
+		fmt.Fprintf(b, "%s    %s %s\n", indent, header.Name, caddyQuote(header.Value))
+	}
+	fmt.Fprintf(b, "%s}\n", indent)
+}
+
+func writeAccessLogDirective(b *strings.Builder, s Site, indent string) {
+	cfg := normalizeAccessLogConfig(s.AccessLog, s.Name)
+	if !cfg.Enabled {
+		return
+	}
+	fmt.Fprintf(b, "%slog {\n", indent)
+	fmt.Fprintf(b, "%s    output file %s {\n", indent, caddyQuote(cfg.OutputFile))
+	fmt.Fprintf(b, "%s        roll_size %s\n", indent, cfg.RollSize)
+	fmt.Fprintf(b, "%s        roll_keep %d\n", indent, cfg.RollKeep)
+	if cfg.RollKeepDays > 0 {
+		fmt.Fprintf(b, "%s        roll_keep_for %dh\n", indent, cfg.RollKeepDays*24)
+	}
+	fmt.Fprintf(b, "%s    }\n", indent)
+	fmt.Fprintf(b, "%s    format %s\n", indent, cfg.Format)
+	fmt.Fprintf(b, "%s}\n", indent)
 }
 
 func writeSiteRouteContent(b *strings.Builder, s Site, blockInner string) error {
@@ -3056,6 +3150,8 @@ func normalizeSiteProxyConfig(s *Site) {
 	if s == nil {
 		return
 	}
+	s.Response = normalizeResponseOptimizationConfig(s.Response)
+	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
 	s.ReverseProxy = normalizeReverseProxyAdvancedConfig(s.ReverseProxy)
 	s.Upstreams = normalizeProxyUpstreams(s.Upstreams, s.Backend)
 	if len(s.Upstreams) > 0 {
@@ -3096,6 +3192,8 @@ func normalizeSiteStaticConfig(s *Site) {
 	s.RootPath = strings.TrimSpace(s.RootPath)
 	s.StaticMode = mode
 	s.IndexFile = normalizeStaticIndexFile(mode, s.IndexFile)
+	s.Response = normalizeResponseOptimizationConfig(s.Response)
+	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
 	if mode != "static" {
 		s.DirectoryBrowsing = false
 	}
@@ -3125,6 +3223,12 @@ func validateSiteProxyConfig(s Site) error {
 		return errors.New("后端地址不能为空")
 	}
 	if err := validateHTTPOnlyListenPorts(s); err != nil {
+		return err
+	}
+	if err := validateResponseOptimizationConfig(s.Response, "响应优化"); err != nil {
+		return err
+	}
+	if err := validateAccessLogConfig(s.AccessLog, s.Name, "访问日志"); err != nil {
 		return err
 	}
 	if err := validateProxyUpstreams(normalizeProxyUpstreams(s.Upstreams, s.Backend), s.LoadBalancingPolicy, "默认上游"); err != nil {
@@ -3160,6 +3264,12 @@ func validateSiteProxyConfig(s Site) error {
 
 func validateSiteStaticConfig(s Site) error {
 	if err := validateHTTPOnlyListenPorts(s); err != nil {
+		return err
+	}
+	if err := validateResponseOptimizationConfig(s.Response, "响应优化"); err != nil {
+		return err
+	}
+	if err := validateAccessLogConfig(s.AccessLog, s.Name, "访问日志"); err != nil {
 		return err
 	}
 	rootPath := strings.TrimSpace(s.RootPath)
@@ -3199,6 +3309,131 @@ func validateStaticFallbackPath(value string) error {
 		if segment == ".." {
 			return errors.New("SPA fallback 文件不能包含 .. 路径段")
 		}
+	}
+	return nil
+}
+
+func normalizeResponseOptimizationConfig(cfg ResponseOptimizationConfig) ResponseOptimizationConfig {
+	cfg.CacheControlValue = strings.TrimSpace(cfg.CacheControlValue)
+	if cfg.CacheControlEnabled && cfg.CacheControlValue == "" {
+		cfg.CacheControlValue = defaultCacheControlValue
+	}
+	if !cfg.CacheControlEnabled {
+		cfg.CacheControlValue = ""
+	}
+	return cfg
+}
+
+func validateResponseOptimizationConfig(cfg ResponseOptimizationConfig, label string) error {
+	normalized := normalizeResponseOptimizationConfig(cfg)
+	value := strings.TrimSpace(normalized.CacheControlValue)
+	if cfg.CacheControlEnabled && value == "" {
+		return fmt.Errorf("%s Cache-Control 不能为空", label)
+	}
+	if value != "" && hasControlChars(value) {
+		return fmt.Errorf("%s Cache-Control 不能包含控制字符", label)
+	}
+	return nil
+}
+
+func normalizeAccessLogConfig(cfg AccessLogConfig, siteName string) AccessLogConfig {
+	cfg.Format = strings.ToLower(strings.TrimSpace(cfg.Format))
+	if cfg.Format == "" {
+		cfg.Format = defaultAccessLogFormat
+	}
+	cfg.OutputFile = normalizeAccessLogOutputFile(cfg.OutputFile, siteName)
+	cfg.RollSize = strings.TrimSpace(cfg.RollSize)
+	if cfg.RollSize == "" {
+		cfg.RollSize = defaultAccessLogRollSize
+	}
+	if cfg.RollKeep <= 0 {
+		cfg.RollKeep = defaultAccessLogRollKeep
+	}
+	if cfg.RollKeepDays < 0 {
+		cfg.RollKeepDays = 0
+	}
+	if cfg.RollKeepDays == 0 {
+		cfg.RollKeepDays = defaultAccessLogRollKeepDays
+	}
+	return cfg
+}
+
+func normalizeAccessLogOutputFile(value string, siteName string) string {
+	value = strings.TrimSpace(filepath.ToSlash(value))
+	if value == "" {
+		return defaultAccessLogOutputFile(siteName)
+	}
+	clean := path.Clean(value)
+	if clean == "." || clean == "/" {
+		return defaultAccessLogOutputFile(siteName)
+	}
+	hasWindowsDrive := len(clean) >= 3 && clean[1] == ':' && clean[2] == '/'
+	if !strings.HasPrefix(clean, "/") && !hasWindowsDrive {
+		clean = "/" + clean
+	}
+	return clean
+}
+
+func defaultAccessLogOutputFile(siteName string) string {
+	name := strings.TrimSpace(siteName)
+	if name == "" {
+		name = "site"
+	}
+	return normalizedAccessLogDir() + "/" + sanitizeAccessLogFileName(name) + ".log"
+}
+
+func normalizedAccessLogDir() string {
+	dir := path.Clean(filepath.ToSlash(strings.TrimSpace(accessLogDir)))
+	if dir == "." || dir == "/" {
+		return "/config/access-logs"
+	}
+	hasWindowsDrive := len(dir) >= 3 && dir[1] == ':' && dir[2] == '/'
+	if !strings.HasPrefix(dir, "/") && !hasWindowsDrive {
+		dir = "/" + dir
+	}
+	return strings.TrimRight(dir, "/")
+}
+
+func sanitizeAccessLogFileName(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	out := strings.Trim(b.String(), "._-")
+	if out == "" {
+		return "site"
+	}
+	return out
+}
+
+func validateAccessLogConfig(cfg AccessLogConfig, siteName string, label string) error {
+	normalized := normalizeAccessLogConfig(cfg, siteName)
+	if normalized.Format != "json" && normalized.Format != "console" {
+		return fmt.Errorf("%s格式无效", label)
+	}
+	if hasControlChars(normalized.OutputFile) {
+		return fmt.Errorf("%s输出文件不能包含控制字符", label)
+	}
+	prefix := normalizedAccessLogDir() + "/"
+	if !strings.HasPrefix(normalized.OutputFile, prefix) {
+		return fmt.Errorf("%s输出文件必须位于 %s", label, accessLogDir)
+	}
+	rel := strings.TrimPrefix(normalized.OutputFile, prefix)
+	if rel == "" || strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
+		return fmt.Errorf("%s输出文件必须是 %s 下的直接文件", label, accessLogDir)
+	}
+	if !accessLogRollSizeRe.MatchString(normalized.RollSize) {
+		return fmt.Errorf("%s单文件大小必须类似 10MiB、100MB", label)
+	}
+	if normalized.RollKeep <= 0 {
+		return fmt.Errorf("%s保留文件数必须大于 0", label)
+	}
+	if normalized.RollKeepDays < 0 {
+		return fmt.Errorf("%s保留天数不能小于 0", label)
 	}
 	return nil
 }
@@ -5231,35 +5466,39 @@ type npmProxyHost struct {
 	ForwardAuth                ForwardAuthConfig          `json:"forward_auth,omitempty"`
 	UpstreamInsecureSkipVerify bool                       `json:"upstream_insecure_skip_verify,omitempty"`
 	ReverseProxy               ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
+	Response                   ResponseOptimizationConfig `json:"response,omitempty"`
+	AccessLog                  AccessLogConfig            `json:"access_log,omitempty"`
 	Owner                      npmUser                    `json:"owner,omitempty"`
 	Certificate                *npmCertificate            `json:"certificate,omitempty"`
 	AccessList                 *npmAccessList             `json:"access_list,omitempty"`
 }
 
 type npmStaticHost struct {
-	ID                int             `json:"id"`
-	CreatedOn         string          `json:"created_on"`
-	ModifiedOn        string          `json:"modified_on"`
-	OwnerUserID       int             `json:"owner_user_id"`
-	ServiceName       string          `json:"service_name,omitempty"`
-	DomainNames       []string        `json:"domain_names"`
-	ListenPort        int             `json:"listen_port"`
-	ListenPorts       []int           `json:"listen_ports,omitempty"`
-	RootPath          string          `json:"root_path"`
-	Mode              string          `json:"mode"`
-	IndexFile         string          `json:"index_file,omitempty"`
-	DirectoryBrowsing bool            `json:"directory_browsing"`
-	AccessListID      int             `json:"access_list_id"`
-	CertificateID     any             `json:"certificate_id"`
-	SSLForced         bool            `json:"ssl_forced"`
-	Meta              map[string]any  `json:"meta"`
-	HTTP2Support      bool            `json:"http2_support"`
-	Enabled           bool            `json:"enabled"`
-	HSTSEnabled       bool            `json:"hsts_enabled"`
-	HSTSSubdomains    bool            `json:"hsts_subdomains"`
-	Owner             npmUser         `json:"owner,omitempty"`
-	Certificate       *npmCertificate `json:"certificate,omitempty"`
-	AccessList        *npmAccessList  `json:"access_list,omitempty"`
+	ID                int                        `json:"id"`
+	CreatedOn         string                     `json:"created_on"`
+	ModifiedOn        string                     `json:"modified_on"`
+	OwnerUserID       int                        `json:"owner_user_id"`
+	ServiceName       string                     `json:"service_name,omitempty"`
+	DomainNames       []string                   `json:"domain_names"`
+	ListenPort        int                        `json:"listen_port"`
+	ListenPorts       []int                      `json:"listen_ports,omitempty"`
+	RootPath          string                     `json:"root_path"`
+	Mode              string                     `json:"mode"`
+	IndexFile         string                     `json:"index_file,omitempty"`
+	DirectoryBrowsing bool                       `json:"directory_browsing"`
+	AccessListID      int                        `json:"access_list_id"`
+	CertificateID     any                        `json:"certificate_id"`
+	SSLForced         bool                       `json:"ssl_forced"`
+	Meta              map[string]any             `json:"meta"`
+	HTTP2Support      bool                       `json:"http2_support"`
+	Enabled           bool                       `json:"enabled"`
+	HSTSEnabled       bool                       `json:"hsts_enabled"`
+	HSTSSubdomains    bool                       `json:"hsts_subdomains"`
+	Response          ResponseOptimizationConfig `json:"response,omitempty"`
+	AccessLog         AccessLogConfig            `json:"access_log,omitempty"`
+	Owner             npmUser                    `json:"owner,omitempty"`
+	Certificate       *npmCertificate            `json:"certificate,omitempty"`
+	AccessList        *npmAccessList             `json:"access_list,omitempty"`
 }
 
 type npmCertificate struct {
@@ -5939,6 +6178,10 @@ func npmProxyHostItemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		http.Error(w, "proxy host not found", http.StatusNotFound)
+		return
+	}
+	if len(parts) >= 2 && parts[1] == "logs" && r.Method == http.MethodGet {
+		handleSiteAccessLogRequest(w, r, site, "proxy-host")
 		return
 	}
 	if len(parts) == 2 && r.Method == http.MethodPost {
@@ -7350,6 +7593,10 @@ func handleSiteBackedItem(w http.ResponseWriter, r *http.Request, prefix string,
 		http.Error(w, "host not found", http.StatusNotFound)
 		return
 	}
+	if len(parts) >= 2 && parts[1] == "logs" && r.Method == http.MethodGet {
+		handleSiteAccessLogRequest(w, r, site, kind+"-host")
+		return
+	}
 	if len(parts) == 2 && r.Method == http.MethodPost {
 		switch parts[1] {
 		case "enable", "disable":
@@ -7386,6 +7633,73 @@ func handleSiteBackedItem(w http.ResponseWriter, r *http.Request, prefix string,
 		appendAuditLog(kind+"-host", stableID(site.Name), "deleted", siteAuditMeta(site))
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+type siteAccessLogPayload struct {
+	Enabled bool     `json:"enabled"`
+	Path    string   `json:"path"`
+	Lines   []string `json:"lines"`
+}
+
+func handleSiteAccessLogRequest(w http.ResponseWriter, r *http.Request, s Site, objectLabel string) {
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	download := len(pathParts) > 0 && pathParts[len(pathParts)-1] == "download"
+	cfg := normalizeAccessLogConfig(s.AccessLog, s.Name)
+	if err := validateAccessLogConfig(cfg, s.Name, "访问日志"); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if download {
+		downloadSiteAccessLog(w, cfg, objectLabel, stableID(s.Name))
+		return
+	}
+	n := 300
+	if raw := r.URL.Query().Get("n"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 5000 {
+			n = parsed
+		}
+	}
+	lines, err := readSiteAccessLogLines(cfg.OutputFile, n)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, siteAccessLogPayload{Enabled: cfg.Enabled, Path: cfg.OutputFile, Lines: lines})
+}
+
+func readSiteAccessLogLines(caddyPath string, n int) ([]string, error) {
+	data, err := os.ReadFile(filepath.FromSlash(caddyPath))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out, nil
+}
+
+func downloadSiteAccessLog(w http.ResponseWriter, cfg AccessLogConfig, objectLabel string, id int) {
+	data, err := os.ReadFile(filepath.FromSlash(cfg.OutputFile))
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%d-access.log"`, objectLabel, id))
+	if len(data) > 0 {
+		_, _ = w.Write(data)
 	}
 }
 
@@ -7529,6 +7843,8 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		ForwardAuth:                forwardAuth,
 		UpstreamInsecureSkipVerify: reverseProxy.Transport.TLSInsecureSkipVerify,
 		ReverseProxy:               reverseProxy,
+		Response:                   normalizeResponseOptimizationConfig(s.Response),
+		AccessLog:                  normalizeAccessLogConfig(s.AccessLog, s.Name),
 		Owner:                      localNPMUser,
 		Certificate:                cert,
 		AccessList:                 accessList,
@@ -7712,6 +8028,8 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		ForwardAuth:                forwardAuth,
 		UpstreamInsecureSkipVerify: reverseProxy.Transport.TLSInsecureSkipVerify,
 		ReverseProxy:               reverseProxy,
+		Response:                   normalizeResponseOptimizationConfig(p.Response),
+		AccessLog:                  normalizeAccessLogConfig(p.AccessLog, defaultString(existingName, uniqueSiteName(firstDomain(p.DomainNames)))),
 		HSTSEnabled:                p.HSTSEnabled,
 		HSTSSubdomains:             p.HSTSSubdomains,
 		TrustForwardedProto:        p.TrustForwardedProto,
@@ -7886,6 +8204,8 @@ func siteToNPMStaticHost(s Site, certByDomain map[string]npmCertificate) npmStat
 		Enabled:        !s.Disabled,
 		HSTSEnabled:    s.HSTSEnabled,
 		HSTSSubdomains: s.HSTSSubdomains,
+		Response:       normalizeResponseOptimizationConfig(s.Response),
+		AccessLog:      normalizeAccessLogConfig(s.AccessLog, s.Name),
 		Owner:          localNPMUser,
 		Certificate:    cert,
 		AccessList:     accessList,
@@ -7921,6 +8241,8 @@ func npmStaticHostToSite(item npmStaticHost, existingName string) (Site, error) 
 		Issuer:              issuer,
 		HSTSEnabled:         item.HSTSEnabled,
 		HSTSSubdomains:      item.HSTSSubdomains,
+		Response:            normalizeResponseOptimizationConfig(item.Response),
+		AccessLog:           normalizeAccessLogConfig(item.AccessLog, defaultString(existingName, "static-"+uniqueSiteName(firstDomain(item.DomainNames)))),
 		Disabled:            !item.Enabled,
 	}
 	if site.Wildcard {

@@ -12,6 +12,7 @@ export * from "./NotificationChannelModal";
 export * from "./ProxyHostModal";
 export * from "./RedirectionHostModal";
 export * from "./RenewCertificateModal";
+export * from "./SiteAccessLogModal";
 export * from "./StaticHostModal";
 export * from "./StreamModal";
 export * from "./WakeDeviceModal";

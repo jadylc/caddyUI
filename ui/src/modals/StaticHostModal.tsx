@@ -6,11 +6,17 @@ import { Alert } from "react-bootstrap";
 import Modal from "react-bootstrap/Modal";
 import {
 	AccessField,
+	AccessLogFields,
 	Button,
 	DomainCertificateBindingsField,
 	DomainNamesField,
 	Loading,
+	ResponseOptimizationFields,
 	SSLOptionsFields,
+	normalizeAccessLog,
+	normalizeResponseOptimization,
+	withAccessLogDefaults,
+	withResponseOptimizationDefaults,
 } from "src/components";
 import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { useSetStaticHost, useStaticHost } from "src/hooks";
@@ -121,6 +127,8 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 			indexFile: mode === "spa" ? String(values.indexFile || "/index.html").trim() : "",
 			directoryBrowsing: mode === "static" && !!values.directoryBrowsing,
 			accessListId: Number(values.accessListId || 0),
+			response: normalizeResponseOptimization(values.response, "public, max-age=3600"),
+			accessLog: normalizeAccessLog(values.accessLog),
 			certificateId:
 				values.sslForced && values.meta?.certificateBindings?.length
 					? -1
@@ -173,6 +181,11 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 								hstsEnabled: initialData?.hstsEnabled ?? data?.hstsEnabled ?? false,
 								hstsSubdomains:
 									initialData?.hstsSubdomains ?? data?.hstsSubdomains ?? false,
+								response: withResponseOptimizationDefaults(
+									initialData?.response ?? data?.response,
+									"public, max-age=3600",
+								),
+								accessLog: withAccessLogDefaults(initialData?.accessLog ?? data?.accessLog),
 								meta: initialData?.meta ?? data?.meta ?? {},
 							} as any
 						}
@@ -234,6 +247,18 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 														role="tab"
 													>
 														<T id="column.access" />
+													</a>
+												</li>
+												<li className="nav-item" role="presentation">
+													<a
+														href="#tab-static-response"
+														className="nav-link"
+														data-bs-toggle="tab"
+														aria-selected="false"
+														tabIndex={-1}
+														role="tab"
+													>
+														运维
 													</a>
 												</li>
 												<li className="nav-item" role="presentation">
@@ -400,6 +425,15 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 												</div>
 												<div className="tab-pane" id="tab-static-access" role="tabpanel">
 													<AccessField />
+												</div>
+												<div className="tab-pane" id="tab-static-response" role="tabpanel">
+													<h4 className="py-2">响应优化</h4>
+													<ResponseOptimizationFields
+														color="bg-cyan"
+														defaultCacheControl="public, max-age=3600"
+													/>
+													<h4 className="py-2 mt-4">访问日志</h4>
+													<AccessLogFields color="bg-cyan" />
 												</div>
 												<div className="tab-pane" id="tab-static-ssl" role="tabpanel">
 													<DomainCertificateBindingsField />

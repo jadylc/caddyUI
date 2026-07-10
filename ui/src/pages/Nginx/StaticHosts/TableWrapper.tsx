@@ -6,7 +6,7 @@ import { deleteStaticHost, toggleStaticHost } from "src/api/backend";
 import { Button, HasPermission, LoadingPage } from "src/components";
 import { useStaticHosts } from "src/hooks";
 import { T } from "src/locale";
-import { showDeleteConfirmModal, showHelpModal, showStaticHostModal } from "src/modals";
+import { showDeleteConfirmModal, showHelpModal, showSiteAccessLogModal, showStaticHostModal } from "src/modals";
 import { MANAGE, STATIC_HOSTS } from "src/modules/Permissions";
 import { showObjectSuccess } from "src/notifications";
 import Table from "./Table";
@@ -139,6 +139,9 @@ export default function TableWrapper() {
 							),
 						});
 					}}
+					onAccessLog={(host) =>
+						showSiteAccessLogModal("static", host.id, host.serviceName || host.domainNames?.[0] || `${host.id}`)
+					}
 					onDisableToggle={handleDisableToggle}
 					onNew={() => showStaticHostModal("new")}
 				/>

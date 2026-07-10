@@ -177,6 +177,28 @@ export interface ReverseProxyTransportConfig {
 	writeTimeout?: string;
 }
 
+export interface ResponseOptimizationConfig {
+	compressionEnabled?: boolean;
+	cacheControlEnabled?: boolean;
+	cacheControlValue?: string;
+	securityHeadersEnabled?: boolean;
+}
+
+export interface AccessLogConfig {
+	enabled?: boolean;
+	format?: "json" | "console";
+	outputFile?: string;
+	rollSize?: string;
+	rollKeep?: number;
+	rollKeepDays?: number;
+}
+
+export interface SiteAccessLog {
+	enabled: boolean;
+	path: string;
+	lines: string[];
+}
+
 export interface AutheliaSettings {
 	enabled: boolean;
 	upstream: string;
@@ -226,6 +248,8 @@ export interface ProxyHost {
 	forwardAuth?: ForwardAuthConfig;
 	upstreamInsecureSkipVerify?: boolean;
 	reverseProxy?: ReverseProxyAdvancedConfig;
+	response?: ResponseOptimizationConfig;
+	accessLog?: AccessLogConfig;
 	// Expansions:
 	owner?: User;
 	accessList?: AccessList;
@@ -253,6 +277,8 @@ export interface StaticHost {
 	enabled: boolean;
 	hstsEnabled: boolean;
 	hstsSubdomains: boolean;
+	response?: ResponseOptimizationConfig;
+	accessLog?: AccessLogConfig;
 	// Expansions:
 	owner?: User;
 	accessList?: AccessList;

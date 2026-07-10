@@ -6,16 +6,22 @@ import { Alert } from "react-bootstrap";
 import Modal from "react-bootstrap/Modal";
 import {
 	AccessField,
+	AccessLogFields,
 	Button,
 	DomainCertificateBindingsField,
 	DomainNamesField,
 	Loading,
 	LocationsFields,
 	ReverseProxyAdvancedPanel,
+	ResponseOptimizationFields,
 	SSLOptionsFields,
 	UpstreamsFields,
 	normalizeReverseProxyAdvanced,
+	normalizeResponseOptimization,
+	normalizeAccessLog,
 	withReverseProxyDefaults,
+	withResponseOptimizationDefaults,
+	withAccessLogDefaults,
 } from "src/components";
 import { type ForwardAuthProviderID, forwardAuthProviders } from "src/forwardAuthProviders";
 import { useAutheliaSettings, useAuthentikSettings, useProxyHost, useSetProxyHost } from "src/hooks";
@@ -284,6 +290,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 			forwardPort: Number(values.forwardPort || 0),
 		};
 		const reverseProxy = normalizeReverseProxyAdvanced(values.reverseProxy);
+		const response = normalizeResponseOptimization(values.response, "public, max-age=300");
+		const accessLog = normalizeAccessLog(values.accessLog);
 
 		const payload = {
 			...values,
@@ -299,6 +307,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 			accessListId: Number(values.accessListId || 0),
 			forwardAuth,
 			reverseProxy,
+			response,
+			accessLog,
 			upstreamInsecureSkipVerify: !!reverseProxy.transport?.tlsInsecureSkipVerify,
 			certificateId:
 				values.sslForced && values.meta?.certificateBindings?.length
@@ -391,6 +401,11 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 											data?.forwardAuth?.copyHeaders ??
 											""),
 								},
+								response: withResponseOptimizationDefaults(
+									initialData?.response ?? data?.response,
+									"public, max-age=300",
+								),
+								accessLog: withAccessLogDefaults(initialData?.accessLog ?? data?.accessLog),
 								meta: initialData?.meta ?? data?.meta ?? {},
 							} as any
 						}
@@ -460,6 +475,18 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 														role="tab"
 													>
 														反代高级
+													</a>
+												</li>
+												<li className="nav-item" role="presentation">
+													<a
+														href="#tab-response"
+														className="nav-link"
+														data-bs-toggle="tab"
+														aria-selected="false"
+														tabIndex={-1}
+														role="tab"
+													>
+														运维
 													</a>
 												</li>
 												<li className="nav-item" role="presentation">
@@ -585,6 +612,15 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 												</div>
 												<div className="tab-pane" id="tab-reverse-proxy" role="tabpanel">
 													<ReverseProxyAdvancedPanel name="reverseProxy" />
+												</div>
+												<div className="tab-pane" id="tab-response" role="tabpanel">
+													<h4 className="py-2">响应优化</h4>
+													<ResponseOptimizationFields
+														color="bg-lime"
+														defaultCacheControl="public, max-age=300"
+													/>
+													<h4 className="py-2 mt-4">访问日志</h4>
+													<AccessLogFields color="bg-lime" />
 												</div>
 												<div className="tab-pane" id="tab-ssl" role="tabpanel">
 													<DomainCertificateBindingsField />
