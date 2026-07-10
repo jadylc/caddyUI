@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -50,6 +51,7 @@ var (
 	streamPath                = "/config/streams.json"
 	dynamicDNSPath            = "/config/dynamic-dns.json"
 	domainMonitorPath         = "/config/domain-monitor.json"
+	errorResponseTemplatePath = "/config/error-response-templates.json"
 	notificationChannelPath   = "/config/notification-channels.json"
 	notificationStatePath     = "/config/notification-state.json"
 	settingsPath              = "/config/settings.json"
@@ -59,6 +61,7 @@ var (
 	customCertMeta            = "/config/custom-certs.json"
 	customCertsDir            = "/config/custom-certs"
 	accessLogDir              = "/config/access-logs"
+	errorPagesDir             = "/config/error-pages"
 	auditLogPath              = "/config/audit-log.json"
 	caddyfile                 = "/etc/caddy/Caddyfile"
 	legacyAcmeFile            = "/etc/caddy/global.d/acme.conf"
@@ -180,6 +183,7 @@ type Site struct {
 	ReverseProxy               ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
 	Response                   ResponseOptimizationConfig `json:"response,omitempty"`
 	AccessLog                  AccessLogConfig            `json:"access_log,omitempty"`
+	ErrorHandling              ErrorHandlingConfig        `json:"error_handling,omitempty"`
 	Disabled                   bool                       `json:"disabled,omitempty"`
 	LastError                  string                     `json:"last_error,omitempty"`
 	LastErrorAt                time.Time                  `json:"last_error_at,omitempty"`
@@ -199,6 +203,37 @@ type AccessLogConfig struct {
 	RollSize     string `json:"roll_size,omitempty"`
 	RollKeep     int    `json:"roll_keep,omitempty"`
 	RollKeepDays int    `json:"roll_keep_days,omitempty"`
+}
+
+type ErrorHandlingConfig struct {
+	Enabled    bool `json:"enabled,omitempty"`
+	TemplateID int  `json:"template_id,omitempty"`
+}
+
+type ErrorResponseTemplate struct {
+	ID          int                 `json:"id"`
+	CreatedOn   string              `json:"created_on,omitempty"`
+	ModifiedOn  string              `json:"modified_on,omitempty"`
+	OwnerUserID int                 `json:"owner_user_id,omitempty"`
+	Name        string              `json:"name"`
+	Description string              `json:"description,omitempty"`
+	Enabled     bool                `json:"enabled"`
+	StaticRoot  string              `json:"static_root,omitempty"`
+	Rules       []ErrorResponseRule `json:"rules,omitempty"`
+	Meta        map[string]any      `json:"meta,omitempty"`
+	HostCount   int                 `json:"host_count,omitempty"`
+	Owner       npmUser             `json:"owner,omitempty"`
+}
+
+type ErrorResponseRule struct {
+	ID           int      `json:"id,omitempty"`
+	Statuses     []string `json:"statuses,omitempty"`
+	Action       string   `json:"action"`
+	StaticFile   string   `json:"static_file,omitempty"`
+	RedirectURL  string   `json:"redirect_url,omitempty"`
+	RedirectCode int      `json:"redirect_code,omitempty"`
+	Upstream     string   `json:"upstream,omitempty"`
+	Body         string   `json:"body,omitempty"`
 }
 
 type ReverseProxyAdvancedConfig struct {
@@ -398,7 +433,7 @@ func main() {
 
 	applyEnvOverrides()
 
-	for _, d := range []string{sitesDir, accessLogDir, filepath.Dir(legacyAcmeFile), filepath.Dir(logFile), filepath.Dir(layer4ConfPath), filepath.Dir(dynamicDNSConfPath)} {
+	for _, d := range []string{sitesDir, accessLogDir, errorPagesDir, filepath.Dir(legacyAcmeFile), filepath.Dir(logFile), filepath.Dir(layer4ConfPath), filepath.Dir(dynamicDNSConfPath)} {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			log.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -450,6 +485,9 @@ func main() {
 	mux.HandleFunc("/caddy/dynamic-dns/", npmDynamicDNSItemHandler)
 	mux.HandleFunc("/caddy/domain-monitor", npmDomainMonitorsHandler)
 	mux.HandleFunc("/caddy/domain-monitor/", npmDomainMonitorItemHandler)
+	mux.HandleFunc("/caddy/error-response-templates", errorResponseTemplatesHandler)
+	mux.HandleFunc("/caddy/error-response-templates/", errorResponseTemplateItemHandler)
+	mux.HandleFunc("/caddy/observability", observabilityHandler)
 	mux.HandleFunc("/caddy/notifications/channels", notificationChannelsHandler)
 	mux.HandleFunc("/caddy/notifications/channels/", notificationChannelItemHandler)
 	mux.HandleFunc("/nginx/proxy-hosts", npmProxyHostsHandler)
@@ -480,6 +518,9 @@ func main() {
 	mux.HandleFunc("/nginx/dynamic-dns/", npmDynamicDNSItemHandler)
 	mux.HandleFunc("/nginx/domain-monitor", npmDomainMonitorsHandler)
 	mux.HandleFunc("/nginx/domain-monitor/", npmDomainMonitorItemHandler)
+	mux.HandleFunc("/nginx/error-response-templates", errorResponseTemplatesHandler)
+	mux.HandleFunc("/nginx/error-response-templates/", errorResponseTemplateItemHandler)
+	mux.HandleFunc("/nginx/observability", observabilityHandler)
 	mux.HandleFunc("/nginx/notifications/channels", notificationChannelsHandler)
 	mux.HandleFunc("/nginx/notifications/channels/", notificationChannelItemHandler)
 	mux.HandleFunc("/audit-log", npmEmptyListHandler)
@@ -2243,6 +2284,11 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 		writeResponseOptimizationDirectives(&b, s.Response, blockInner)
 		writeAccessLogDirective(&b, s, blockInner)
 	}
+	if siteSupportsErrorHandling(s) {
+		if err := writeErrorHandlingDirective(&b, s, "    "); err != nil {
+			return "", err
+		}
+	}
 
 	if s.HSTSEnabled && !s.NoTLS {
 		hstsValue := "max-age=31536000"
@@ -2264,6 +2310,86 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 func siteSupportsResponseOptimization(s Site) bool {
 	kind := strings.TrimSpace(s.Kind)
 	return kind == "" || kind == "proxy" || kind == "static"
+}
+
+func siteSupportsErrorHandling(s Site) bool {
+	kind := strings.TrimSpace(s.Kind)
+	return kind == "" || kind == "proxy" || kind == "static"
+}
+
+func writeErrorHandlingDirective(b *strings.Builder, s Site, indent string) error {
+	cfg := normalizeErrorHandlingConfig(s.ErrorHandling)
+	if !cfg.Enabled {
+		return nil
+	}
+	template, ok, err := errorResponseTemplateByID(cfg.TemplateID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("错误处理模板不存在: %d", cfg.TemplateID)
+	}
+	if !template.Enabled {
+		return nil
+	}
+	template = normalizeErrorResponseTemplate(template)
+	if len(template.Rules) == 0 {
+		return nil
+	}
+	for _, rule := range template.Rules {
+		writeErrorResponseRuleBlock(b, template, rule, indent)
+	}
+	return nil
+}
+
+func errorResponseTemplateByID(id int) (ErrorResponseTemplate, bool, error) {
+	items, err := loadErrorResponseTemplates()
+	if err != nil {
+		return ErrorResponseTemplate{}, false, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, true, nil
+		}
+	}
+	return ErrorResponseTemplate{}, false, nil
+}
+
+func writeErrorResponseRuleBlock(b *strings.Builder, tmpl ErrorResponseTemplate, rule ErrorResponseRule, indent string) {
+	statusArgs := errorResponseStatusArgs(rule.Statuses)
+	if statusArgs == "" {
+		fmt.Fprintf(b, "%shandle_errors {\n", indent)
+	} else {
+		fmt.Fprintf(b, "%shandle_errors %s {\n", indent, statusArgs)
+	}
+	inner := indent + "    "
+	switch rule.Action {
+	case "redirect":
+		fmt.Fprintf(b, "%sredir %s %d\n", inner, caddyQuote(rule.RedirectURL), rule.RedirectCode)
+	case "reverse_proxy":
+		fmt.Fprintf(b, "%sreverse_proxy %s {\n", inner, rule.Upstream)
+		fmt.Fprintf(b, "%s    replace_status {err.status_code}\n", inner)
+		fmt.Fprintf(b, "%s}\n", inner)
+	case "respond":
+		fmt.Fprintf(b, "%srespond %s\n", inner, caddyQuote(rule.Body))
+	default:
+		fmt.Fprintf(b, "%sroot * %s\n", inner, caddyQuote(tmpl.StaticRoot))
+		fmt.Fprintf(b, "%srewrite * %s\n", inner, caddyQuote(rule.StaticFile))
+		fmt.Fprintf(b, "%sfile_server\n", inner)
+	}
+	fmt.Fprintf(b, "%s}\n", indent)
+}
+
+func errorResponseStatusArgs(statuses []string) string {
+	out := []string{}
+	for _, status := range statuses {
+		status = strings.ToLower(strings.TrimSpace(status))
+		if status == "" || status == "default" {
+			continue
+		}
+		out = append(out, status)
+	}
+	return strings.Join(out, " ")
 }
 
 func writeResponseOptimizationDirectives(b *strings.Builder, cfg ResponseOptimizationConfig, indent string) {
@@ -3152,6 +3278,7 @@ func normalizeSiteProxyConfig(s *Site) {
 	}
 	s.Response = normalizeResponseOptimizationConfig(s.Response)
 	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
+	s.ErrorHandling = normalizeErrorHandlingConfig(s.ErrorHandling)
 	s.ReverseProxy = normalizeReverseProxyAdvancedConfig(s.ReverseProxy)
 	s.Upstreams = normalizeProxyUpstreams(s.Upstreams, s.Backend)
 	if len(s.Upstreams) > 0 {
@@ -3194,6 +3321,7 @@ func normalizeSiteStaticConfig(s *Site) {
 	s.IndexFile = normalizeStaticIndexFile(mode, s.IndexFile)
 	s.Response = normalizeResponseOptimizationConfig(s.Response)
 	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
+	s.ErrorHandling = normalizeErrorHandlingConfig(s.ErrorHandling)
 	if mode != "static" {
 		s.DirectoryBrowsing = false
 	}
@@ -3229,6 +3357,9 @@ func validateSiteProxyConfig(s Site) error {
 		return err
 	}
 	if err := validateAccessLogConfig(s.AccessLog, s.Name, "访问日志"); err != nil {
+		return err
+	}
+	if err := validateErrorHandlingConfig(s.ErrorHandling, "错误处理"); err != nil {
 		return err
 	}
 	if err := validateProxyUpstreams(normalizeProxyUpstreams(s.Upstreams, s.Backend), s.LoadBalancingPolicy, "默认上游"); err != nil {
@@ -3270,6 +3401,9 @@ func validateSiteStaticConfig(s Site) error {
 		return err
 	}
 	if err := validateAccessLogConfig(s.AccessLog, s.Name, "访问日志"); err != nil {
+		return err
+	}
+	if err := validateErrorHandlingConfig(s.ErrorHandling, "错误处理"); err != nil {
 		return err
 	}
 	rootPath := strings.TrimSpace(s.RootPath)
@@ -3438,6 +3572,248 @@ func validateAccessLogConfig(cfg AccessLogConfig, siteName string, label string)
 	return nil
 }
 
+func normalizeErrorHandlingConfig(cfg ErrorHandlingConfig) ErrorHandlingConfig {
+	if !cfg.Enabled {
+		return ErrorHandlingConfig{}
+	}
+	if cfg.TemplateID <= 0 {
+		return ErrorHandlingConfig{Enabled: true}
+	}
+	return cfg
+}
+
+func validateErrorHandlingConfig(cfg ErrorHandlingConfig, label string) error {
+	cfg = normalizeErrorHandlingConfig(cfg)
+	if !cfg.Enabled {
+		return nil
+	}
+	if cfg.TemplateID <= 0 {
+		return fmt.Errorf("%s模板不能为空", label)
+	}
+	templates, err := loadErrorResponseTemplates()
+	if err != nil {
+		return err
+	}
+	for _, tmpl := range templates {
+		if tmpl.ID == cfg.TemplateID {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s模板不存在", label)
+}
+
+func normalizedErrorPagesDir() string {
+	dir := path.Clean(filepath.ToSlash(strings.TrimSpace(errorPagesDir)))
+	if dir == "." || dir == "/" {
+		return "/config/error-pages"
+	}
+	hasWindowsDrive := len(dir) >= 3 && dir[1] == ':' && dir[2] == '/'
+	if !strings.HasPrefix(dir, "/") && !hasWindowsDrive {
+		dir = "/" + dir
+	}
+	return strings.TrimRight(dir, "/")
+}
+
+func defaultErrorResponseStaticRoot(item *ErrorResponseTemplate) string {
+	id := item.ID
+	if id <= 0 {
+		id = stableID(defaultString(item.Name, "default"))
+	}
+	return normalizedErrorPagesDir() + "/" + sanitizeAccessLogFileName(fmt.Sprintf("%d", id))
+}
+
+func normalizeErrorResponseStaticRoot(value string) string {
+	value = strings.TrimSpace(filepath.ToSlash(value))
+	if value == "" {
+		return normalizedErrorPagesDir()
+	}
+	clean := path.Clean(value)
+	if clean == "." || clean == "/" {
+		return normalizedErrorPagesDir()
+	}
+	hasWindowsDrive := len(clean) >= 3 && clean[1] == ':' && clean[2] == '/'
+	if !strings.HasPrefix(clean, "/") && !hasWindowsDrive {
+		clean = "/" + clean
+	}
+	return strings.TrimRight(clean, "/")
+}
+
+func normalizeErrorResponseRule(rule ErrorResponseRule, fallbackID int) ErrorResponseRule {
+	rule.ID = fallbackID
+	rule.Action = strings.ToLower(strings.TrimSpace(rule.Action))
+	if rule.Action == "" {
+		rule.Action = "static_file"
+	}
+	statuses := make([]string, 0, len(rule.Statuses))
+	seen := map[string]bool{}
+	for _, raw := range rule.Statuses {
+		status := strings.ToLower(strings.TrimSpace(raw))
+		if status == "" || status == "default" {
+			status = "default"
+		}
+		if seen[status] {
+			continue
+		}
+		seen[status] = true
+		statuses = append(statuses, status)
+	}
+	if len(statuses) == 0 {
+		statuses = []string{"default"}
+	}
+	rule.Statuses = statuses
+	rule.StaticFile = normalizeErrorResponseStaticFile(rule.StaticFile)
+	rule.RedirectURL = strings.TrimSpace(rule.RedirectURL)
+	rule.Upstream = strings.TrimSpace(rule.Upstream)
+	rule.Body = strings.TrimSpace(rule.Body)
+	if rule.RedirectCode == 0 {
+		rule.RedirectCode = http.StatusFound
+	}
+	return rule
+}
+
+func normalizeErrorResponseStaticFile(value string) string {
+	value = strings.TrimSpace(filepath.ToSlash(value))
+	if value == "" {
+		return "/default.html"
+	}
+	clean := path.Clean(value)
+	if clean == "." || clean == "/" {
+		return "/default.html"
+	}
+	if !strings.HasPrefix(clean, "/") {
+		clean = "/" + clean
+	}
+	return clean
+}
+
+func validateErrorResponseTemplate(item ErrorResponseTemplate) error {
+	item = normalizeErrorResponseTemplate(item)
+	if strings.TrimSpace(item.Name) == "" {
+		return errors.New("模板名称不能为空")
+	}
+	if hasControlChars(item.Name) || hasControlChars(item.Description) {
+		return errors.New("模板名称和描述不能包含控制字符")
+	}
+	if len(item.Rules) == 0 {
+		return errors.New("至少需要一条错误响应规则")
+	}
+	if err := validateErrorResponseStaticRoot(item.StaticRoot); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, rule := range item.Rules {
+		if err := validateErrorResponseRule(rule); err != nil {
+			return err
+		}
+		for _, status := range rule.Statuses {
+			if seen[status] {
+				return fmt.Errorf("状态 %s 不能配置多条规则", status)
+			}
+			seen[status] = true
+		}
+	}
+	return nil
+}
+
+func normalizeErrorResponseTemplate(item ErrorResponseTemplate) ErrorResponseTemplate {
+	stampErrorResponseTemplate(&item, "", false)
+	return item
+}
+
+func validateErrorResponseStaticRoot(value string) error {
+	root := normalizeErrorResponseStaticRoot(value)
+	if hasControlChars(root) {
+		return errors.New("错误页目录不能包含控制字符")
+	}
+	prefix := normalizedErrorPagesDir() + "/"
+	if root != normalizedErrorPagesDir() && !strings.HasPrefix(root, prefix) {
+		return fmt.Errorf("错误页目录必须位于 %s", errorPagesDir)
+	}
+	for _, segment := range strings.Split(strings.Trim(root, "/"), "/") {
+		if segment == ".." {
+			return errors.New("错误页目录不能包含 .. 路径段")
+		}
+	}
+	return nil
+}
+
+func validateErrorResponseRule(rule ErrorResponseRule) error {
+	for _, status := range rule.Statuses {
+		if !validErrorResponseStatus(status) {
+			return fmt.Errorf("错误状态 %s 无效", status)
+		}
+	}
+	switch rule.Action {
+	case "static_file":
+		if err := validateErrorResponseStaticFile(rule.StaticFile); err != nil {
+			return err
+		}
+	case "redirect":
+		if rule.RedirectURL == "" {
+			return errors.New("跳转地址不能为空")
+		}
+		if hasControlChars(rule.RedirectURL) {
+			return errors.New("跳转地址不能包含控制字符")
+		}
+		u, err := url.Parse(rule.RedirectURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return errors.New("跳转地址必须是完整 URL")
+		}
+		if rule.RedirectCode < 300 || rule.RedirectCode > 399 {
+			return errors.New("跳转状态码必须是 3xx")
+		}
+	case "reverse_proxy":
+		if rule.Upstream == "" {
+			return errors.New("错误页反代地址不能为空")
+		}
+		if hasControlChars(rule.Upstream) {
+			return errors.New("错误页反代地址不能包含控制字符")
+		}
+		u, err := url.Parse(rule.Upstream)
+		if err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return errors.New("错误页反代地址必须是 http/https URL")
+		}
+	case "respond":
+		if rule.Body == "" {
+			return errors.New("响应内容不能为空")
+		}
+		if hasDisallowedTextControlChars(rule.Body) {
+			return errors.New("响应内容不能包含控制字符")
+		}
+	default:
+		return errors.New("错误响应动作无效")
+	}
+	return nil
+}
+
+func validateErrorResponseStaticFile(value string) error {
+	value = normalizeErrorResponseStaticFile(value)
+	if hasControlChars(value) || strings.ContainsAny(value, " \t\r\n") {
+		return errors.New("错误页文件不能包含空白或控制字符")
+	}
+	if strings.ContainsAny(value, "{}") {
+		return errors.New("错误页文件不能包含 Caddy 占位符")
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return errors.New("错误页文件不能包含 .. 路径段")
+		}
+	}
+	return nil
+}
+
+func validErrorResponseStatus(value string) bool {
+	switch value {
+	case "default", "4xx", "5xx":
+		return true
+	}
+	if len(value) != 3 {
+		return false
+	}
+	code, err := strconv.Atoi(value)
+	return err == nil && code >= 400 && code <= 599
+}
+
 func validateReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig, label string) error {
 	rawRetryMethods := strings.ToLower(strings.TrimSpace(cfg.Retry.Methods))
 	if rawRetryMethods != "" && rawRetryMethods != "get_head" {
@@ -3577,6 +3953,18 @@ func validateProxyHeaderRules(rules []ProxyHeaderRule, label string) error {
 
 func hasControlChars(value string) bool {
 	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDisallowedTextControlChars(value string) bool {
+	for _, r := range value {
+		if r == '\n' || r == '\r' || r == '\t' {
+			continue
+		}
 		if r < 0x20 || r == 0x7f {
 			return true
 		}
@@ -5468,6 +5856,7 @@ type npmProxyHost struct {
 	ReverseProxy               ReverseProxyAdvancedConfig `json:"reverse_proxy,omitempty"`
 	Response                   ResponseOptimizationConfig `json:"response,omitempty"`
 	AccessLog                  AccessLogConfig            `json:"access_log,omitempty"`
+	ErrorHandling              ErrorHandlingConfig        `json:"error_handling,omitempty"`
 	Owner                      npmUser                    `json:"owner,omitempty"`
 	Certificate                *npmCertificate            `json:"certificate,omitempty"`
 	AccessList                 *npmAccessList             `json:"access_list,omitempty"`
@@ -5496,6 +5885,7 @@ type npmStaticHost struct {
 	HSTSSubdomains    bool                       `json:"hsts_subdomains"`
 	Response          ResponseOptimizationConfig `json:"response,omitempty"`
 	AccessLog         AccessLogConfig            `json:"access_log,omitempty"`
+	ErrorHandling     ErrorHandlingConfig        `json:"error_handling,omitempty"`
 	Owner             npmUser                    `json:"owner,omitempty"`
 	Certificate       *npmCertificate            `json:"certificate,omitempty"`
 	AccessList        *npmAccessList             `json:"access_list,omitempty"`
@@ -6376,6 +6766,71 @@ func npmDeadHostItemHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return npmDeadHostToSite(item, existing)
 	})
+}
+
+func errorResponseTemplatesHandler(w http.ResponseWriter, r *http.Request) {
+	items, err := loadErrorResponseTemplates()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		sortByModifiedOnDesc(items, func(item ErrorResponseTemplate) (string, string) { return item.ModifiedOn, item.CreatedOn })
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost:
+		var item ErrorResponseTemplate
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		item.ID = stableID(fmt.Sprintf("error-response-template:%s:%d", item.Name, time.Now().UnixNano()))
+		item.Enabled = true
+		stampErrorResponseTemplate(&item, "", true)
+		if err := validateErrorResponseTemplate(item); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		items = append(items, item)
+		if err := saveJSONFile(errorResponseTemplatePath, items); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := renderSitesAndReload(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		appendAuditLog("error-response-template", item.ID, "created", auditMetaForJSONItem(item))
+		writeJSON(w, http.StatusCreated, item)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func errorResponseTemplateItemHandler(w http.ResponseWriter, r *http.Request) {
+	prefix := trimAnyPrefix(r.URL.Path, "/caddy/error-response-templates/", "/nginx/error-response-templates/")
+	if r.Method == http.MethodDelete {
+		id, action, ok := parseNPMItemPath(w, r, prefix)
+		if !ok {
+			return
+		}
+		if action != "" {
+			http.NotFound(w, r)
+			return
+		}
+		count, err := errorResponseTemplateReferenceCount(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if count > 0 {
+			http.Error(w, fmt.Sprintf("错误响应模板仍被 %d 个站点引用，不能删除", count), http.StatusBadRequest)
+			return
+		}
+	}
+	handleJSONBackedItem[ErrorResponseTemplate](w, r, prefix, errorResponseTemplatePath, loadErrorResponseTemplates, func(item *ErrorResponseTemplate) {
+		stampErrorResponseTemplate(item, "", true)
+	}, renderSitesAndReload, validateErrorResponseTemplate)
 }
 
 func npmStreamsHandler(w http.ResponseWriter, r *http.Request) {
@@ -7845,6 +8300,7 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		ReverseProxy:               reverseProxy,
 		Response:                   normalizeResponseOptimizationConfig(s.Response),
 		AccessLog:                  normalizeAccessLogConfig(s.AccessLog, s.Name),
+		ErrorHandling:              normalizeErrorHandlingConfig(s.ErrorHandling),
 		Owner:                      localNPMUser,
 		Certificate:                cert,
 		AccessList:                 accessList,
@@ -8030,6 +8486,7 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		ReverseProxy:               reverseProxy,
 		Response:                   normalizeResponseOptimizationConfig(p.Response),
 		AccessLog:                  normalizeAccessLogConfig(p.AccessLog, defaultString(existingName, uniqueSiteName(firstDomain(p.DomainNames)))),
+		ErrorHandling:              normalizeErrorHandlingConfig(p.ErrorHandling),
 		HSTSEnabled:                p.HSTSEnabled,
 		HSTSSubdomains:             p.HSTSSubdomains,
 		TrustForwardedProto:        p.TrustForwardedProto,
@@ -8206,6 +8663,7 @@ func siteToNPMStaticHost(s Site, certByDomain map[string]npmCertificate) npmStat
 		HSTSSubdomains: s.HSTSSubdomains,
 		Response:       normalizeResponseOptimizationConfig(s.Response),
 		AccessLog:      normalizeAccessLogConfig(s.AccessLog, s.Name),
+		ErrorHandling:  normalizeErrorHandlingConfig(s.ErrorHandling),
 		Owner:          localNPMUser,
 		Certificate:    cert,
 		AccessList:     accessList,
@@ -8243,6 +8701,7 @@ func npmStaticHostToSite(item npmStaticHost, existingName string) (Site, error) 
 		HSTSSubdomains:      item.HSTSSubdomains,
 		Response:            normalizeResponseOptimizationConfig(item.Response),
 		AccessLog:           normalizeAccessLogConfig(item.AccessLog, defaultString(existingName, "static-"+uniqueSiteName(firstDomain(item.DomainNames)))),
+		ErrorHandling:       normalizeErrorHandlingConfig(item.ErrorHandling),
 		Disabled:            !item.Enabled,
 	}
 	if site.Wildcard {
@@ -9076,6 +9535,35 @@ func loadNPMAccessLists() ([]npmAccessList, error) {
 	return items, nil
 }
 
+func loadErrorResponseTemplates() ([]ErrorResponseTemplate, error) {
+	items := []ErrorResponseTemplate{}
+	if err := loadJSONFile(errorResponseTemplatePath, &items); err != nil {
+		return nil, err
+	}
+	counts := errorResponseTemplateReferenceCounts()
+	fallback := timestampFromFile(errorResponseTemplatePath)
+	for i := range items {
+		stampErrorResponseTemplate(&items[i], fallback, false)
+		items[i].HostCount = counts[items[i].ID]
+	}
+	return items, nil
+}
+
+func errorResponseTemplateReferenceCounts() map[int]int {
+	counts := map[int]int{}
+	sites, err := readAllSites()
+	if err != nil {
+		return counts
+	}
+	for _, site := range sites {
+		cfg := normalizeErrorHandlingConfig(site.ErrorHandling)
+		if cfg.Enabled && cfg.TemplateID > 0 {
+			counts[cfg.TemplateID]++
+		}
+	}
+	return counts
+}
+
 func accessListProxyHostCounts() map[int]int {
 	counts := map[int]int{}
 	sites, err := readAllSites()
@@ -9088,6 +9576,21 @@ func accessListProxyHostCounts() map[int]int {
 		}
 	}
 	return counts
+}
+
+func errorResponseTemplateReferenceCount(id int) (int, error) {
+	sites, err := readAllSites()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, site := range sites {
+		cfg := normalizeErrorHandlingConfig(site.ErrorHandling)
+		if cfg.Enabled && cfg.TemplateID == id {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func accessListByID(id int) (npmAccessList, bool) {
@@ -10738,7 +11241,7 @@ func auditDuplicate(item auditEntry, objectType string, objectID int, action str
 }
 
 type npmID interface {
-	*npmStream | *npmAccessList | *npmDynamicDNS | *npmDomainMonitor | *npmWakeDevice
+	*npmStream | *npmAccessList | *npmDynamicDNS | *npmDomainMonitor | *npmWakeDevice | *ErrorResponseTemplate
 }
 
 func handleJSONBackedItem[T any](w http.ResponseWriter, r *http.Request, prefix string, path string, loader func() ([]T, error), stamp func(*T), afterSave func() error, validators ...func(T) error) {
@@ -10869,6 +11372,8 @@ func getNPMItemID(item any) int {
 		return v.ID
 	case npmWakeDevice:
 		return v.ID
+	case ErrorResponseTemplate:
+		return v.ID
 	}
 	return 0
 }
@@ -10885,6 +11390,8 @@ func setNPMItemID(item any, id int) {
 		v.ID = id
 	case *npmWakeDevice:
 		v.ID = id
+	case *ErrorResponseTemplate:
+		v.ID = id
 	}
 }
 
@@ -10897,6 +11404,8 @@ func setNPMItemEnabled(item any, enabled bool) {
 	case *npmDomainMonitor:
 		v.Enabled = enabled
 	case *npmWakeDevice:
+		v.Enabled = enabled
+	case *ErrorResponseTemplate:
 		v.Enabled = enabled
 	}
 }
@@ -11074,15 +11583,38 @@ func stampNPMAccessList(item *npmAccessList, fallback string, touchModified bool
 	item.Clients = clients
 }
 
+func stampErrorResponseTemplate(item *ErrorResponseTemplate, fallback string, touchModified bool) {
+	stampCreatedModified(&item.CreatedOn, &item.ModifiedOn, fallback, touchModified)
+	item.OwnerUserID = 1
+	item.Name = strings.TrimSpace(item.Name)
+	item.Description = strings.TrimSpace(item.Description)
+	if item.Meta == nil {
+		item.Meta = map[string]any{}
+	}
+	if strings.TrimSpace(item.StaticRoot) == "" {
+		item.StaticRoot = defaultErrorResponseStaticRoot(item)
+	} else {
+		item.StaticRoot = normalizeErrorResponseStaticRoot(item.StaticRoot)
+	}
+	for i := range item.Rules {
+		item.Rules[i] = normalizeErrorResponseRule(item.Rules[i], i+1)
+	}
+	if item.Rules == nil {
+		item.Rules = []ErrorResponseRule{}
+	}
+	item.Owner = localNPMUser
+}
+
 func siteAuditMeta(s Site) map[string]any {
 	return map[string]any{
-		"name":         s.Name,
-		"domainNames":  splitDomains(s.Domain),
-		"kind":         defaultString(s.Kind, "proxy"),
-		"backend":      s.Backend,
-		"root_path":    s.RootPath,
-		"redirect_url": s.RedirectURL,
-		"accessListID": s.AccessListID,
+		"name":            s.Name,
+		"domainNames":     splitDomains(s.Domain),
+		"kind":            defaultString(s.Kind, "proxy"),
+		"backend":         s.Backend,
+		"root_path":       s.RootPath,
+		"redirect_url":    s.RedirectURL,
+		"accessListID":    s.AccessListID,
+		"errorTemplateID": s.ErrorHandling.TemplateID,
 	}
 }
 
@@ -11098,6 +11630,8 @@ func auditTypeForJSONItem(item any) string {
 		return "wake-device"
 	case npmAccessList:
 		return "access-list"
+	case ErrorResponseTemplate:
+		return "error-response-template"
 	default:
 		return "system"
 	}
@@ -11115,6 +11649,8 @@ func auditMetaForJSONItem(item any) map[string]any {
 		return map[string]any{"name": v.Name, "macAddress": v.MACAddress, "host": v.Host}
 	case npmAccessList:
 		return map[string]any{"name": v.Name}
+	case ErrorResponseTemplate:
+		return map[string]any{"name": v.Name, "rules": len(v.Rules)}
 	default:
 		return map[string]any{}
 	}
@@ -11683,6 +12219,763 @@ func defaultInt(v, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+type observabilityOverview struct {
+	CollectedAt  string                  `json:"collected_at"`
+	Available    bool                    `json:"available"`
+	Error        string                  `json:"error,omitempty"`
+	Reload       observabilityReload     `json:"reload"`
+	Traffic      observabilityTraffic    `json:"traffic"`
+	Upstreams    []observabilityUpstream `json:"upstreams"`
+	Sites        []observabilitySite     `json:"sites"`
+	RecentErrors []observabilityLogEvent `json:"recent_errors"`
+	ErrorTrend   observabilityErrorTrend `json:"error_trend"`
+}
+
+type observabilityReload struct {
+	Successful    bool   `json:"successful"`
+	LastSuccessAt string `json:"last_success_at,omitempty"`
+}
+
+type observabilityTraffic struct {
+	TotalRequests int64            `json:"total_requests"`
+	QPS           float64          `json:"qps"`
+	InFlight      int64            `json:"in_flight"`
+	P95MS         float64          `json:"p95_ms"`
+	StatusClasses map[string]int64 `json:"status_classes"`
+	Methods       map[string]int64 `json:"methods"`
+}
+
+type observabilityUpstream struct {
+	Address string `json:"address"`
+	Healthy bool   `json:"healthy"`
+	Status  string `json:"status"`
+}
+
+type observabilitySite struct {
+	ID               int                         `json:"id"`
+	Name             string                      `json:"name"`
+	Kind             string                      `json:"kind"`
+	Domains          []string                    `json:"domains"`
+	AccessLogEnabled bool                        `json:"access_log_enabled"`
+	Requests         int64                       `json:"requests"`
+	P95MS            float64                     `json:"p95_ms"`
+	StatusClasses    map[string]int64            `json:"status_classes"`
+	Upstreams        []observabilitySiteUpstream `json:"upstreams,omitempty"`
+	RecentErrors     []observabilityLogEvent     `json:"recent_errors,omitempty"`
+}
+
+type observabilitySiteUpstream struct {
+	Address string `json:"address"`
+	Status  string `json:"status"`
+}
+
+type observabilityLogEvent struct {
+	Time    string `json:"time,omitempty"`
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	Source  string `json:"source"`
+}
+
+type observabilityErrorTrend struct {
+	Last15M int `json:"last_15m"`
+	Last1H  int `json:"last_1h"`
+	Last24H int `json:"last_24h"`
+}
+
+type prometheusSample struct {
+	Name   string
+	Labels map[string]string
+	Value  float64
+}
+
+type accessLogObservation struct {
+	At              time.Time
+	Status          int
+	DurationSeconds float64
+	Message         string
+}
+
+var observabilityRate = struct {
+	sync.Mutex
+	total       int64
+	collectedAt time.Time
+	qps         float64
+	initialized bool
+}{}
+
+func observabilityHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	overview := collectObservabilityOverview(time.Now())
+	writeJSON(w, http.StatusOK, overview)
+}
+
+func collectObservabilityOverview(now time.Time) observabilityOverview {
+	recentErrors := readRuntimeLogEvents(20)
+	overview := observabilityOverview{
+		CollectedAt:  localTimestamp(now),
+		Available:    true,
+		RecentErrors: recentErrors,
+		ErrorTrend:   buildErrorTrend(recentErrors, now),
+	}
+
+	metricsText, err := fetchCaddyMetrics()
+	if err != nil {
+		overview.Available = false
+		overview.Error = err.Error()
+	} else {
+		samples := parsePrometheusText(metricsText)
+		applyObservabilityMetrics(&overview, samples, now)
+	}
+
+	sites, err := readAllSites()
+	if err == nil {
+		overview.Sites = buildSiteObservability(sites, upstreamStatusMap(overview.Upstreams))
+	} else if overview.Error == "" {
+		overview.Error = err.Error()
+	}
+	return overview
+}
+
+func fetchCaddyMetrics() (string, error) {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(caddyAdmin, "/")+"/metrics", nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("读取运行指标失败: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("运行指标返回 %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return string(data), nil
+}
+
+func applyObservabilityMetrics(overview *observabilityOverview, samples []prometheusSample, now time.Time) {
+	statusClasses := emptyStatusClasses()
+	methods := map[string]int64{}
+	buckets := map[float64]float64{}
+	var responseCount float64
+	var requestTotal float64
+	var inFlight float64
+	upstreams := []observabilityUpstream{}
+	reload := observabilityReload{}
+
+	for _, sample := range samples {
+		switch sample.Name {
+		case "caddy_http_requests_total":
+			requestTotal += sample.Value
+		case "caddy_http_requests_in_flight":
+			inFlight += sample.Value
+		case "caddy_http_response_duration_seconds_count":
+			count := int64(math.Round(sample.Value))
+			responseCount += sample.Value
+			addStatusClass(statusClasses, sample.Labels["code"], count)
+			if method := strings.ToUpper(strings.TrimSpace(sample.Labels["method"])); method != "" {
+				methods[method] += count
+			}
+		case "caddy_http_response_duration_seconds_bucket":
+			le, ok := parsePrometheusBucket(sample.Labels["le"])
+			if ok {
+				buckets[le] += sample.Value
+			}
+		case "caddy_reverse_proxy_upstreams_healthy":
+			address := strings.TrimSpace(sample.Labels["upstream"])
+			if address == "" {
+				continue
+			}
+			healthy := sample.Value >= 1
+			status := "unhealthy"
+			if healthy {
+				status = "healthy"
+			}
+			upstreams = append(upstreams, observabilityUpstream{Address: address, Healthy: healthy, Status: status})
+		case "caddy_config_last_reload_successful":
+			reload.Successful = sample.Value >= 1
+		case "caddy_config_last_reload_success_timestamp_seconds":
+			if sample.Value > 0 {
+				reload.LastSuccessAt = localTimestamp(time.Unix(int64(sample.Value), 0))
+			}
+		}
+	}
+
+	total := int64(math.Round(math.Max(requestTotal, responseCount)))
+	overview.Reload = reload
+	overview.Upstreams = mergeObservabilityUpstreams(upstreams)
+	overview.Traffic = observabilityTraffic{
+		TotalRequests: total,
+		QPS:           updateObservabilityQPS(total, now),
+		InFlight:      int64(math.Round(inFlight)),
+		P95MS:         histogramQuantileMS(0.95, buckets, responseCount),
+		StatusClasses: statusClasses,
+		Methods:       methods,
+	}
+}
+
+func updateObservabilityQPS(total int64, now time.Time) float64 {
+	observabilityRate.Lock()
+	defer observabilityRate.Unlock()
+	if observabilityRate.initialized {
+		elapsed := now.Sub(observabilityRate.collectedAt).Seconds()
+		if elapsed > 0 && total >= observabilityRate.total {
+			observabilityRate.qps = float64(total-observabilityRate.total) / elapsed
+		} else {
+			observabilityRate.qps = 0
+		}
+	}
+	observabilityRate.total = total
+	observabilityRate.collectedAt = now
+	observabilityRate.initialized = true
+	return roundFloat(observabilityRate.qps, 2)
+}
+
+func mergeObservabilityUpstreams(items []observabilityUpstream) []observabilityUpstream {
+	byAddress := map[string]observabilityUpstream{}
+	for _, item := range items {
+		key := strings.TrimSpace(item.Address)
+		if key == "" {
+			continue
+		}
+		if existing, ok := byAddress[key]; ok {
+			existing.Healthy = existing.Healthy && item.Healthy
+			if !existing.Healthy {
+				existing.Status = "unhealthy"
+			}
+			byAddress[key] = existing
+			continue
+		}
+		byAddress[key] = item
+	}
+	keys := make([]string, 0, len(byAddress))
+	for key := range byAddress {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]observabilityUpstream, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, byAddress[key])
+	}
+	return out
+}
+
+func upstreamStatusMap(items []observabilityUpstream) map[string]string {
+	out := map[string]string{}
+	for _, item := range items {
+		status := item.Status
+		if status == "" {
+			status = "unknown"
+		}
+		out[normalizeUpstreamAddress(item.Address)] = status
+	}
+	return out
+}
+
+func buildSiteObservability(sites []Site, upstreamStatuses map[string]string) []observabilitySite {
+	out := make([]observabilitySite, 0, len(sites))
+	for _, site := range sites {
+		cfg := normalizeAccessLogConfig(site.AccessLog, site.Name)
+		row := observabilitySite{
+			ID:               stableID(site.Name),
+			Name:             site.Name,
+			Kind:             defaultString(site.Kind, "proxy"),
+			Domains:          splitDomains(site.Domain),
+			AccessLogEnabled: cfg.Enabled,
+			StatusClasses:    emptyStatusClasses(),
+			Upstreams:        siteObservabilityUpstreams(site, upstreamStatuses),
+		}
+		if cfg.Enabled {
+			if observations, err := readSiteAccessLogObservations(cfg.OutputFile, 1000); err == nil {
+				durations := []float64{}
+				for _, obs := range observations {
+					row.Requests++
+					addStatusClass(row.StatusClasses, strconv.Itoa(obs.Status), 1)
+					if obs.DurationSeconds > 0 {
+						durations = append(durations, obs.DurationSeconds)
+					}
+					if obs.Status >= 500 {
+						row.RecentErrors = append(row.RecentErrors, observabilityLogEvent{
+							Time:    observabilityTimestamp(obs.At),
+							Level:   "error",
+							Message: fmt.Sprintf("HTTP %d %s", obs.Status, strings.TrimSpace(obs.Message)),
+							Source:  site.Name,
+						})
+					}
+				}
+				row.P95MS = percentileMS(durations, 0.95)
+				if len(row.RecentErrors) > 5 {
+					row.RecentErrors = row.RecentErrors[len(row.RecentErrors)-5:]
+				}
+				reverseLogEvents(row.RecentErrors)
+			}
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
+}
+
+func siteObservabilityUpstreams(site Site, statuses map[string]string) []observabilitySiteUpstream {
+	addresses := []string{}
+	if defaultString(site.Kind, "proxy") == "proxy" {
+		for _, upstream := range normalizeProxyUpstreams(site.Upstreams, site.Backend) {
+			addresses = append(addresses, normalizeUpstreamAddress(proxyUpstreamHostPort(upstream.Backend)))
+		}
+		for _, loc := range site.Locations {
+			fallback := loc.Backend
+			if fallback == "" {
+				fallback = site.Backend
+			}
+			for _, upstream := range normalizeProxyUpstreams(loc.Upstreams, fallback) {
+				addresses = append(addresses, normalizeUpstreamAddress(proxyUpstreamHostPort(upstream.Backend)))
+			}
+		}
+	}
+	addresses = uniqueSortedStrings(addresses)
+	out := make([]observabilitySiteUpstream, 0, len(addresses))
+	for _, address := range addresses {
+		status := statuses[address]
+		if status == "" {
+			status = "unknown"
+		}
+		out = append(out, observabilitySiteUpstream{Address: address, Status: status})
+	}
+	return out
+}
+
+func normalizeUpstreamAddress(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	if strings.Contains(address, "://") {
+		address = proxyUpstreamHostPort(address)
+	}
+	if slash := strings.Index(address, "/"); slash >= 0 {
+		address = address[:slash]
+	}
+	return strings.ToLower(strings.TrimSpace(address))
+}
+
+func readSiteAccessLogObservations(caddyPath string, limit int) ([]accessLogObservation, error) {
+	lines, err := readSiteAccessLogLines(caddyPath, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]accessLogObservation, 0, len(lines))
+	for _, line := range lines {
+		if obs, ok := parseAccessLogObservation(line); ok {
+			out = append(out, obs)
+		}
+	}
+	return out, nil
+}
+
+func parseAccessLogObservation(line string) (accessLogObservation, bool) {
+	var raw map[string]any
+	if json.Unmarshal([]byte(line), &raw) != nil {
+		status := firstIntFromText(line)
+		if status == 0 {
+			return accessLogObservation{}, false
+		}
+		return accessLogObservation{Status: status, Message: line}, true
+	}
+	status := intFromAny(raw["status"])
+	if status == 0 {
+		return accessLogObservation{}, false
+	}
+	obs := accessLogObservation{
+		At:              timeFromAny(raw["ts"]),
+		Status:          status,
+		DurationSeconds: floatFromAny(raw["duration"]),
+		Message:         stringFromAny(raw["msg"]),
+	}
+	return obs, true
+}
+
+func readRuntimeLogEvents(limit int) []observabilityLogEvent {
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		return []observabilityLogEvent{}
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	out := []observabilityLogEvent{}
+	for _, line := range lines {
+		if ev, ok := parseRuntimeLogEvent(line); ok {
+			out = append(out, ev)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	reverseLogEvents(out)
+	return out
+}
+
+func parseRuntimeLogEvent(line string) (observabilityLogEvent, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return observabilityLogEvent{}, false
+	}
+	lower := strings.ToLower(line)
+	var raw map[string]any
+	if json.Unmarshal([]byte(line), &raw) == nil {
+		level := strings.ToLower(strings.TrimSpace(stringFromAny(raw["level"])))
+		if level != "error" && level != "warn" && level != "warning" {
+			return observabilityLogEvent{}, false
+		}
+		msg := stringFromAny(raw["msg"])
+		if isLowLevelRuntimeLogMessage(msg) {
+			return observabilityLogEvent{}, false
+		}
+		if errText := stringFromAny(raw["error"]); errText != "" {
+			if msg != "" {
+				msg += ": " + errText
+			} else {
+				msg = errText
+			}
+		}
+		if msg == "" {
+			msg = line
+		}
+		if level == "warning" {
+			level = "warn"
+		}
+		source := stringFromAny(raw["logger"])
+		if source == "" {
+			source = "caddy"
+		}
+		return observabilityLogEvent{
+			Time:    observabilityTimestamp(timeFromAny(raw["ts"])),
+			Level:   level,
+			Message: msg,
+			Source:  source,
+		}, true
+	}
+	level := ""
+	switch {
+	case strings.Contains(lower, "level=error"), strings.Contains(lower, "[error]"), strings.Contains(lower, " error "):
+		level = "error"
+	case strings.Contains(lower, "level=warn"), strings.Contains(lower, "level=warning"), strings.Contains(lower, "[warn]"):
+		level = "warn"
+	default:
+		return observabilityLogEvent{}, false
+	}
+	if isLowLevelRuntimeLogMessage(line) {
+		return observabilityLogEvent{}, false
+	}
+	return observabilityLogEvent{Level: level, Message: line, Source: "caddy"}, true
+}
+
+func isLowLevelRuntimeLogMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "caddyfile input is not formatted") ||
+		strings.Contains(lower, "run 'caddy fmt") ||
+		strings.Contains(lower, "run \"caddy fmt")
+}
+
+func buildErrorTrend(events []observabilityLogEvent, now time.Time) observabilityErrorTrend {
+	trend := observabilityErrorTrend{}
+	for _, event := range events {
+		if event.Level != "error" {
+			continue
+		}
+		at, ok := parseLocalOrRFC3339Time(event.Time)
+		if !ok {
+			continue
+		}
+		age := now.Sub(at)
+		if age < 0 {
+			continue
+		}
+		if age <= 15*time.Minute {
+			trend.Last15M++
+		}
+		if age <= time.Hour {
+			trend.Last1H++
+		}
+		if age <= 24*time.Hour {
+			trend.Last24H++
+		}
+	}
+	return trend
+}
+
+func parseLocalOrRFC3339Time(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func parsePrometheusText(text string) []prometheusSample {
+	out := []prometheusSample{}
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	for scanner.Scan() {
+		if sample, ok := parsePrometheusLine(scanner.Text()); ok {
+			out = append(out, sample)
+		}
+	}
+	return out
+}
+
+func parsePrometheusLine(line string) (prometheusSample, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return prometheusSample{}, false
+	}
+	valueStart := strings.LastIndexAny(line, " \t")
+	if valueStart <= 0 {
+		return prometheusSample{}, false
+	}
+	head := strings.TrimSpace(line[:valueStart])
+	valueText := strings.TrimSpace(line[valueStart:])
+	value, err := strconv.ParseFloat(valueText, 64)
+	if err != nil {
+		return prometheusSample{}, false
+	}
+	sample := prometheusSample{Labels: map[string]string{}, Value: value}
+	if open := strings.Index(head, "{"); open >= 0 {
+		close := strings.LastIndex(head, "}")
+		if close < open {
+			return prometheusSample{}, false
+		}
+		sample.Name = strings.TrimSpace(head[:open])
+		sample.Labels = parsePrometheusLabels(head[open+1 : close])
+	} else {
+		sample.Name = head
+	}
+	if sample.Name == "" {
+		return prometheusSample{}, false
+	}
+	return sample, true
+}
+
+func parsePrometheusLabels(text string) map[string]string {
+	labels := map[string]string{}
+	for len(text) > 0 {
+		text = strings.TrimLeft(text, " \t,")
+		if text == "" {
+			break
+		}
+		eq := strings.Index(text, "=")
+		if eq <= 0 {
+			break
+		}
+		key := strings.TrimSpace(text[:eq])
+		text = strings.TrimLeft(text[eq+1:], " \t")
+		if !strings.HasPrefix(text, "\"") {
+			break
+		}
+		text = text[1:]
+		var b strings.Builder
+		escaped := false
+		i := 0
+		for ; i < len(text); i++ {
+			ch := text[i]
+			if escaped {
+				switch ch {
+				case 'n':
+					b.WriteByte('\n')
+				case 't':
+					b.WriteByte('\t')
+				default:
+					b.WriteByte(ch)
+				}
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				break
+			}
+			b.WriteByte(ch)
+		}
+		if i >= len(text) {
+			break
+		}
+		labels[key] = b.String()
+		text = text[i+1:]
+	}
+	return labels
+}
+
+func parsePrometheusBucket(value string) (float64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "+Inf" || value == "Inf" {
+		return math.Inf(1), true
+	}
+	out, err := strconv.ParseFloat(value, 64)
+	return out, err == nil
+}
+
+func histogramQuantileMS(q float64, buckets map[float64]float64, count float64) float64 {
+	if count <= 0 || len(buckets) == 0 {
+		return 0
+	}
+	keys := make([]float64, 0, len(buckets))
+	for key := range buckets {
+		keys = append(keys, key)
+	}
+	sort.Float64s(keys)
+	target := count * q
+	lastFinite := 0.0
+	for _, key := range keys {
+		if !math.IsInf(key, 0) {
+			lastFinite = key
+		}
+		if buckets[key] >= target {
+			if math.IsInf(key, 0) {
+				return roundFloat(lastFinite*1000, 2)
+			}
+			return roundFloat(key*1000, 2)
+		}
+	}
+	return roundFloat(lastFinite*1000, 2)
+}
+
+func percentileMS(values []float64, q float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sort.Float64s(values)
+	idx := int(math.Ceil(float64(len(values))*q)) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(values) {
+		idx = len(values) - 1
+	}
+	return roundFloat(values[idx]*1000, 2)
+}
+
+func emptyStatusClasses() map[string]int64 {
+	return map[string]int64{"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0}
+}
+
+func addStatusClass(classes map[string]int64, code string, count int64) {
+	if len(code) < 3 {
+		return
+	}
+	switch code[0] {
+	case '2', '3', '4', '5':
+		classes[string(code[0])+"xx"] += count
+	}
+}
+
+func roundFloat(value float64, decimals int) float64 {
+	scale := math.Pow10(decimals)
+	return math.Round(value*scale) / scale
+}
+
+func floatFromAny(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		out, _ := v.Float64()
+		return out
+	case string:
+		out, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return out
+	default:
+		return 0
+	}
+}
+
+func intFromAny(value any) int {
+	return int(math.Round(floatFromAny(value)))
+}
+
+func stringFromAny(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func timeFromAny(value any) time.Time {
+	switch v := value.(type) {
+	case float64:
+		sec, frac := math.Modf(v)
+		return time.Unix(int64(sec), int64(frac*1e9))
+	case json.Number:
+		f, _ := v.Float64()
+		sec, frac := math.Modf(f)
+		return time.Unix(int64(sec), int64(frac*1e9))
+	case string:
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return t
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func firstIntFromText(text string) int {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return r < '0' || r > '9'
+	})
+	for _, field := range fields {
+		if len(field) != 3 {
+			continue
+		}
+		n, err := strconv.Atoi(field)
+		if err == nil && n >= 100 && n <= 599 {
+			return n
+		}
+	}
+	return 0
+}
+
+func reverseLogEvents(items []observabilityLogEvent) {
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
+	}
+}
+
+func observabilityTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return localTimestamp(t)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

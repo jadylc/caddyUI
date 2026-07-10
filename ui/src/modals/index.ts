@@ -5,6 +5,7 @@ export * from "./DeleteConfirmModal";
 export * from "./DNSCertificateModal";
 export * from "./DomainMonitorModal";
 export * from "./DynamicDNSModal";
+export * from "./ErrorResponseTemplateModal";
 export * from "./EventDetailsModal";
 export * from "./HelpModal";
 export * from "./HTTPCertificateModal";

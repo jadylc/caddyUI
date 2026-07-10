@@ -23,6 +23,8 @@ const DeadHosts = lazy(() => import("src/pages/Nginx/DeadHosts"));
 const Streams = lazy(() => import("src/pages/Nginx/Streams"));
 const DynamicDNS = lazy(() => import("src/pages/Nginx/DynamicDNS"));
 const DomainMonitor = lazy(() => import("src/pages/Nginx/DomainMonitor"));
+const ErrorResponseTemplates = lazy(() => import("src/pages/Nginx/ErrorResponseTemplates"));
+const Observability = lazy(() => import("src/pages/Nginx/Observability"));
 const WakeOnLan = lazy(() => import("src/pages/WakeOnLan"));
 const Settings = lazy(() => import("src/pages/Settings"));
 const CredentialSettings = lazy(() => import("src/pages/Settings/Credentials"));
@@ -67,12 +69,22 @@ function Router() {
 							<Route path="/caddy/stream" element={<Streams />} />
 							<Route path="/caddy/dynamic-dns" element={<DynamicDNS />} />
 							<Route path="/caddy/domain-monitor" element={<DomainMonitor />} />
+							<Route path="/caddy/error-response-templates" element={<ErrorResponseTemplates />} />
+							<Route path="/caddy/observability" element={<Observability />} />
 							<Route path="/nginx/proxy" element={<Navigate to="/caddy/proxy" replace />} />
 							<Route path="/nginx/static" element={<Navigate to="/caddy/static" replace />} />
 							<Route path="/nginx/redirection" element={<Navigate to="/caddy/redirection" replace />} />
 							<Route path="/nginx/404" element={<Navigate to="/caddy/404" replace />} />
 							<Route path="/nginx/stream" element={<Navigate to="/caddy/stream" replace />} />
 							<Route path="/nginx/dynamic-dns" element={<Navigate to="/caddy/dynamic-dns" replace />} />
+							<Route
+								path="/nginx/error-response-templates"
+								element={<Navigate to="/caddy/error-response-templates" replace />}
+							/>
+							<Route
+								path="/nginx/observability"
+								element={<Navigate to="/caddy/observability" replace />}
+							/>
 							<Route
 								path="/nginx/domain-monitor"
 								element={<Navigate to="/caddy/domain-monitor" replace />}

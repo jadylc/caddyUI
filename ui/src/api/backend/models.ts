@@ -193,10 +193,106 @@ export interface AccessLogConfig {
 	rollKeepDays?: number;
 }
 
+export interface ErrorHandlingConfig {
+	enabled?: boolean;
+	templateId?: number;
+}
+
+export type ErrorResponseAction = "static_file" | "redirect" | "reverse_proxy" | "respond";
+
+export interface ErrorResponseRule {
+	id?: number;
+	statuses: string[];
+	action: ErrorResponseAction;
+	staticFile?: string;
+	redirectUrl?: string;
+	redirectCode?: number;
+	upstream?: string;
+	body?: string;
+}
+
+export interface ErrorResponseTemplate {
+	id: number;
+	createdOn: string;
+	modifiedOn: string;
+	ownerUserId: number;
+	name: string;
+	description?: string;
+	enabled: boolean;
+	staticRoot?: string;
+	rules: ErrorResponseRule[];
+	meta: Record<string, any>;
+	hostCount?: number;
+	owner?: User;
+}
+
 export interface SiteAccessLog {
 	enabled: boolean;
 	path: string;
 	lines: string[];
+}
+
+export interface ObservabilityReload {
+	successful: boolean;
+	lastSuccessAt?: string;
+}
+
+export interface ObservabilityTraffic {
+	totalRequests: number;
+	qps: number;
+	inFlight: number;
+	p95Ms: number;
+	statusClasses: Record<string, number>;
+	methods: Record<string, number>;
+}
+
+export interface ObservabilityUpstream {
+	address: string;
+	healthy: boolean;
+	status: "healthy" | "unhealthy" | "unknown";
+}
+
+export interface ObservabilitySiteUpstream {
+	address: string;
+	status: "healthy" | "unhealthy" | "unknown";
+}
+
+export interface ObservabilityLogEvent {
+	time?: string;
+	level: "error" | "warn" | string;
+	message: string;
+	source: string;
+}
+
+export interface ObservabilityErrorTrend {
+	last15m: number;
+	last1h: number;
+	last24h: number;
+}
+
+export interface ObservabilitySite {
+	id: number;
+	name: string;
+	kind: string;
+	domains: string[];
+	accessLogEnabled: boolean;
+	requests: number;
+	p95Ms: number;
+	statusClasses: Record<string, number>;
+	upstreams?: ObservabilitySiteUpstream[];
+	recentErrors?: ObservabilityLogEvent[];
+}
+
+export interface ObservabilityOverview {
+	collectedAt: string;
+	available: boolean;
+	error?: string;
+	reload: ObservabilityReload;
+	traffic: ObservabilityTraffic;
+	upstreams: ObservabilityUpstream[];
+	sites: ObservabilitySite[];
+	recentErrors: ObservabilityLogEvent[];
+	errorTrend: ObservabilityErrorTrend;
 }
 
 export interface AutheliaSettings {
@@ -250,6 +346,7 @@ export interface ProxyHost {
 	reverseProxy?: ReverseProxyAdvancedConfig;
 	response?: ResponseOptimizationConfig;
 	accessLog?: AccessLogConfig;
+	errorHandling?: ErrorHandlingConfig;
 	// Expansions:
 	owner?: User;
 	accessList?: AccessList;
@@ -279,6 +376,7 @@ export interface StaticHost {
 	hstsSubdomains: boolean;
 	response?: ResponseOptimizationConfig;
 	accessLog?: AccessLogConfig;
+	errorHandling?: ErrorHandlingConfig;
 	// Expansions:
 	owner?: User;
 	accessList?: AccessList;

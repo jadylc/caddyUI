@@ -536,6 +536,9 @@
   "dashboard": {
     "defaultMessage": "仪表板"
   },
+  "observability": {
+    "defaultMessage": "运行观测"
+  },
   "dead-host": {
     "defaultMessage": "错误页面"
   },
@@ -938,6 +941,12 @@
   "proxy-hosts.count": {
     "defaultMessage": "{count} 个代理服务"
   },
+  "error-response-template": {
+    "defaultMessage": "错误响应模板"
+  },
+  "error-response-templates": {
+    "defaultMessage": "错误响应模板"
+  },
   "static-host": {
     "defaultMessage": "静态站点"
   },
@@ -982,6 +991,15 @@
   },
   "site-management": {
     "defaultMessage": "站点管理"
+  },
+  "site-resources": {
+    "defaultMessage": "站点资源"
+  },
+  "status.enabled": {
+    "defaultMessage": "已启用"
+  },
+  "status.disabled": {
+    "defaultMessage": "已停用"
   },
   "domain-certificates": {
     "defaultMessage": "域名与证书"

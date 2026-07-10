@@ -27,6 +27,7 @@ func withTempPaths(t *testing.T, dir string) {
 	oldCustomCertsDir := customCertsDir
 	oldIssuerCredentialPath := issuerCredentialPath
 	oldDomainMonitorPath := domainMonitorPath
+	oldErrorResponseTemplatePath := errorResponseTemplatePath
 	oldWakeDevicePath := wakeDevicePath
 	oldNotificationChannelPath := notificationChannelPath
 	oldNotificationStatePath := notificationStatePath
@@ -37,6 +38,7 @@ func withTempPaths(t *testing.T, dir string) {
 	customCertsDir = filepath.Join(dir, "custom-certs")
 	issuerCredentialPath = filepath.Join(dir, "issuer-credentials.json")
 	domainMonitorPath = filepath.Join(dir, "domain-monitor.json")
+	errorResponseTemplatePath = filepath.Join(dir, "error-response-templates.json")
 	wakeDevicePath = filepath.Join(dir, "wake-devices.json")
 	notificationChannelPath = filepath.Join(dir, "notification-channels.json")
 	notificationStatePath = filepath.Join(dir, "notification-state.json")
@@ -48,6 +50,7 @@ func withTempPaths(t *testing.T, dir string) {
 		customCertsDir = oldCustomCertsDir
 		issuerCredentialPath = oldIssuerCredentialPath
 		domainMonitorPath = oldDomainMonitorPath
+		errorResponseTemplatePath = oldErrorResponseTemplatePath
 		wakeDevicePath = oldWakeDevicePath
 		notificationChannelPath = oldNotificationChannelPath
 		notificationStatePath = oldNotificationStatePath
@@ -78,8 +81,11 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 	oldCaddyCertsDir := caddyCertsDir
 	oldAuditLogPath := auditLogPath
 	oldAccessLogDir := accessLogDir
+	oldErrorResponseTemplatePath := errorResponseTemplatePath
+	oldErrorPagesDir := errorPagesDir
 	sitesDir = filepath.Join(dir, "sites")
 	accessLogDir = filepath.Join(dir, "access-logs")
+	errorPagesDir = filepath.Join(dir, "error-pages")
 	credentialPath = filepath.Join(dir, "credentials.json")
 	issuerCredentialPath = filepath.Join(dir, "issuer-credentials.json")
 	accessListPath = filepath.Join(dir, "access-lists.json")
@@ -88,11 +94,15 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 	caddyfile = filepath.Join(dir, "Caddyfile")
 	caddyCertsDir = filepath.Join(dir, "certs")
 	auditLogPath = filepath.Join(dir, "audit-log.json")
+	errorResponseTemplatePath = filepath.Join(dir, "error-response-templates.json")
 	if err := os.MkdirAll(sitesDir, 0755); err != nil {
 		t.Fatalf("MkdirAll sitesDir error = %v", err)
 	}
 	if err := os.MkdirAll(accessLogDir, 0755); err != nil {
 		t.Fatalf("MkdirAll accessLogDir error = %v", err)
+	}
+	if err := os.MkdirAll(errorPagesDir, 0755); err != nil {
+		t.Fatalf("MkdirAll errorPagesDir error = %v", err)
 	}
 	if err := os.WriteFile(caddyfile, []byte("{\n    auto_https off\n}\n"), 0644); err != nil {
 		t.Fatalf("WriteFile Caddyfile error = %v", err)
@@ -109,6 +119,8 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 		caddyCertsDir = oldCaddyCertsDir
 		auditLogPath = oldAuditLogPath
 		accessLogDir = oldAccessLogDir
+		errorResponseTemplatePath = oldErrorResponseTemplatePath
+		errorPagesDir = oldErrorPagesDir
 	})
 }
 
@@ -163,6 +175,131 @@ func TestProxyHostUsesAutoModeWhenNoSingleCertificateCoversAllDomains(t *testing
 	}
 	if len(bindings) != 2 || bindings[0].CertificateID != 1 || bindings[1].CertificateID != 2 {
 		t.Fatalf("certificate_bindings = %#v, want per-domain selected bindings", bindings)
+	}
+}
+
+func TestParsePrometheusTextWithLabels(t *testing.T) {
+	samples := parsePrometheusText(`
+# HELP caddy_http_requests_total Counter
+caddy_http_requests_total{handler="subroute",server="srv1"} 12
+caddy_reverse_proxy_upstreams_healthy{upstream="127.0.0.1:9001"} 1
+caddy_metric_without_labels 3
+`)
+
+	if len(samples) != 3 {
+		t.Fatalf("samples len = %d, want 3: %#v", len(samples), samples)
+	}
+	if samples[0].Name != "caddy_http_requests_total" || samples[0].Labels["server"] != "srv1" || samples[0].Value != 12 {
+		t.Fatalf("first sample = %#v", samples[0])
+	}
+	if samples[1].Labels["upstream"] != "127.0.0.1:9001" {
+		t.Fatalf("upstream label = %#v", samples[1].Labels)
+	}
+	if samples[2].Name != "caddy_metric_without_labels" || samples[2].Value != 3 {
+		t.Fatalf("plain sample = %#v", samples[2])
+	}
+}
+
+func TestApplyObservabilityMetricsAggregatesTraffic(t *testing.T) {
+	observabilityRate.Lock()
+	observabilityRate.initialized = false
+	observabilityRate.total = 0
+	observabilityRate.qps = 0
+	observabilityRate.collectedAt = time.Time{}
+	observabilityRate.Unlock()
+
+	samples := parsePrometheusText(`
+caddy_http_requests_total{handler="subroute",server="srv1"} 10
+caddy_http_requests_in_flight{handler="subroute",server="srv1"} 2
+caddy_http_response_duration_seconds_count{code="200",handler="subroute",method="GET",server="srv1"} 8
+caddy_http_response_duration_seconds_count{code="404",handler="subroute",method="GET",server="srv1"} 1
+caddy_http_response_duration_seconds_count{code="502",handler="subroute",method="POST",server="srv1"} 1
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv1",le="0.005"} 7
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv1",le="0.01"} 9
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv1",le="0.05"} 10
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv1",le="+Inf"} 10
+caddy_reverse_proxy_upstreams_healthy{upstream="127.0.0.1:9001"} 1
+caddy_reverse_proxy_upstreams_healthy{upstream="127.0.0.1:9002"} 0
+caddy_config_last_reload_successful 1
+`)
+	var overview observabilityOverview
+
+	applyObservabilityMetrics(&overview, samples, time.Unix(100, 0))
+
+	if overview.Traffic.TotalRequests != 10 {
+		t.Fatalf("TotalRequests = %d, want 10", overview.Traffic.TotalRequests)
+	}
+	if overview.Traffic.InFlight != 2 {
+		t.Fatalf("InFlight = %d, want 2", overview.Traffic.InFlight)
+	}
+	if overview.Traffic.StatusClasses["2xx"] != 8 || overview.Traffic.StatusClasses["4xx"] != 1 || overview.Traffic.StatusClasses["5xx"] != 1 {
+		t.Fatalf("StatusClasses = %#v", overview.Traffic.StatusClasses)
+	}
+	if overview.Traffic.Methods["GET"] != 9 || overview.Traffic.Methods["POST"] != 1 {
+		t.Fatalf("Methods = %#v", overview.Traffic.Methods)
+	}
+	if overview.Traffic.P95MS != 50 {
+		t.Fatalf("P95MS = %v, want 50", overview.Traffic.P95MS)
+	}
+	if len(overview.Upstreams) != 2 || overview.Upstreams[0].Status != "healthy" || overview.Upstreams[1].Status != "unhealthy" {
+		t.Fatalf("Upstreams = %#v", overview.Upstreams)
+	}
+	if !overview.Reload.Successful {
+		t.Fatalf("Reload.Successful = false, want true")
+	}
+
+	samples = parsePrometheusText(`caddy_http_requests_total{handler="subroute",server="srv1"} 16`)
+	applyObservabilityMetrics(&overview, samples, time.Unix(102, 0))
+	if overview.Traffic.QPS != 3 {
+		t.Fatalf("QPS = %v, want 3", overview.Traffic.QPS)
+	}
+}
+
+func TestBuildSiteObservabilityUsesAccessLogAndUpstreamStatus(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(logPath, []byte(strings.Join([]string{
+		`{"ts":1893456000,"msg":"handled request","duration":0.02,"status":200}`,
+		`{"ts":1893456001,"msg":"handled request","duration":0.10,"status":502}`,
+	}, "\n")), 0644); err != nil {
+		t.Fatalf("WriteFile access log error = %v", err)
+	}
+	sites := []Site{{
+		Name:    "app",
+		Kind:    "proxy",
+		Domain:  "app.example.com",
+		Backend: "http://127.0.0.1:9001",
+		AccessLog: AccessLogConfig{
+			Enabled:    true,
+			OutputFile: logPath,
+		},
+	}}
+
+	rows := buildSiteObservability(sites, map[string]string{"127.0.0.1:9001": "healthy"})
+
+	if len(rows) != 1 {
+		t.Fatalf("rows len = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Requests != 2 || row.StatusClasses["2xx"] != 1 || row.StatusClasses["5xx"] != 1 {
+		t.Fatalf("row traffic = requests %d classes %#v", row.Requests, row.StatusClasses)
+	}
+	if row.P95MS != 100 {
+		t.Fatalf("row P95MS = %v, want 100", row.P95MS)
+	}
+	if len(row.Upstreams) != 1 || row.Upstreams[0].Address != "127.0.0.1:9001" || row.Upstreams[0].Status != "healthy" {
+		t.Fatalf("row upstreams = %#v", row.Upstreams)
+	}
+	if len(row.RecentErrors) != 1 || !strings.Contains(row.RecentErrors[0].Message, "HTTP 502") {
+		t.Fatalf("row recent errors = %#v", row.RecentErrors)
+	}
+}
+
+func TestParseRuntimeLogEventSkipsLowLevelConfigFormattingWarning(t *testing.T) {
+	line := `{"level":"warn","ts":1893456000,"logger":"caddy","msg":"Caddyfile input is not formatted; run 'caddy fmt --overwrite' to fix inconsistencies"}`
+
+	if event, ok := parseRuntimeLogEvent(line); ok {
+		t.Fatalf("parseRuntimeLogEvent = %#v, want skipped", event)
 	}
 }
 
@@ -3458,6 +3595,152 @@ func TestNPMStaticHostCreateRendersStaticConfig(t *testing.T) {
 		if !strings.Contains(conf, want) {
 			t.Fatalf("conf = %q, want %q", conf, want)
 		}
+	}
+}
+
+func TestRenderSiteWithErrorResponseTemplate(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+	root := filepath.ToSlash(filepath.Join(errorPagesDir, "default"))
+	template := ErrorResponseTemplate{
+		ID:         101,
+		Name:       "Default errors",
+		Enabled:    true,
+		StaticRoot: root,
+		Rules: []ErrorResponseRule{
+			{Statuses: []string{"404"}, Action: "static_file", StaticFile: "/404.html"},
+			{Statuses: []string{"5xx"}, Action: "reverse_proxy", Upstream: "http://errors.internal:8080"},
+			{Statuses: []string{"default"}, Action: "respond", Body: "Unexpected error"},
+		},
+	}
+	if err := saveJSONFile(errorResponseTemplatePath, []ErrorResponseTemplate{template}); err != nil {
+		t.Fatalf("saveJSONFile template error = %v", err)
+	}
+
+	conf, err := renderSite(Site{
+		Name:    "app",
+		Domain:  "app.example.com",
+		Backend: "http://127.0.0.1:9000",
+		ErrorHandling: ErrorHandlingConfig{
+			Enabled:    true,
+			TemplateID: template.ID,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"handle_errors 404 {",
+		"root * " + caddyQuote(root),
+		`rewrite * "/404.html"`,
+		"file_server",
+		"handle_errors 5xx {",
+		"reverse_proxy http://errors.internal:8080 {",
+		"replace_status {err.status_code}",
+		"handle_errors {",
+		`respond "Unexpected error"`,
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+}
+
+func TestProxyHostCreatePersistsErrorHandlingTemplate(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+	stubCaddyValidate(t)
+	adminServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/load" {
+			t.Fatalf("admin path = %q, want /load", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer adminServer.Close()
+	caddyAdmin = adminServer.URL
+	template := ErrorResponseTemplate{
+		ID:         202,
+		Name:       "Shared errors",
+		Enabled:    true,
+		StaticRoot: filepath.ToSlash(filepath.Join(errorPagesDir, "shared")),
+		Rules:      []ErrorResponseRule{{Statuses: []string{"404"}, Action: "static_file", StaticFile: "/404.html"}},
+	}
+	if err := saveJSONFile(errorResponseTemplatePath, []ErrorResponseTemplate{template}); err != nil {
+		t.Fatalf("saveJSONFile template error = %v", err)
+	}
+
+	body, err := json.Marshal(npmProxyHost{
+		ServiceName:   "App",
+		DomainNames:   []string{"app.example.com"},
+		ListenPort:    8080,
+		ForwardScheme: "http",
+		ForwardHost:   "127.0.0.1",
+		ForwardPort:   9000,
+		SSLForced:     false,
+		Enabled:       true,
+		ErrorHandling: ErrorHandlingConfig{Enabled: true, TemplateID: template.ID},
+	})
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	npmProxyHostsHandler(rr, httptest.NewRequest(http.MethodPost, "/caddy/proxy-hosts", bytes.NewReader(body)))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s, want 201", rr.Code, rr.Body.String())
+	}
+	var created npmProxyHost
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatalf("Unmarshal created error = %v", err)
+	}
+	if created.ErrorHandling.TemplateID != template.ID || !created.ErrorHandling.Enabled {
+		t.Fatalf("created error handling = %#v, want template %d enabled", created.ErrorHandling, template.ID)
+	}
+	name, _ := created.Meta["caddy_name"].(string)
+	confBytes, err := os.ReadFile(filepath.Join(sitesDir, name+confSuffix))
+	if err != nil {
+		t.Fatalf("ReadFile conf error = %v", err)
+	}
+	if conf := string(confBytes); !strings.Contains(conf, "handle_errors 404 {") || !strings.Contains(conf, `rewrite * "/404.html"`) {
+		t.Fatalf("conf = %q, want error template directives", conf)
+	}
+}
+
+func TestErrorResponseTemplateDeleteBlocksReferencedTemplate(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+	template := ErrorResponseTemplate{
+		ID:         303,
+		Name:       "Shared errors",
+		Enabled:    true,
+		StaticRoot: filepath.ToSlash(filepath.Join(errorPagesDir, "shared")),
+		Rules:      []ErrorResponseRule{{Statuses: []string{"404"}, Action: "static_file", StaticFile: "/404.html"}},
+	}
+	if err := saveJSONFile(errorResponseTemplatePath, []ErrorResponseTemplate{template}); err != nil {
+		t.Fatalf("saveJSONFile template error = %v", err)
+	}
+	site := Site{
+		Name:          "app",
+		Domain:        "app.example.com",
+		Backend:       "http://127.0.0.1:9000",
+		ErrorHandling: ErrorHandlingConfig{Enabled: true, TemplateID: template.ID},
+	}
+	if err := saveJSONFile(filepath.Join(sitesDir, site.Name+metaSuffix), site); err != nil {
+		t.Fatalf("saveJSONFile site error = %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/caddy/error-response-templates/303", nil)
+	errorResponseTemplateItemHandler(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s, want 400", rr.Code, rr.Body.String())
+	}
+	items, err := loadErrorResponseTemplates()
+	if err != nil {
+		t.Fatalf("loadErrorResponseTemplates error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != template.ID {
+		t.Fatalf("templates = %#v, want original template retained", items)
 	}
 }
 

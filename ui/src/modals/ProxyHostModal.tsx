@@ -10,6 +10,7 @@ import {
 	Button,
 	DomainCertificateBindingsField,
 	DomainNamesField,
+	ErrorHandlingFields,
 	Loading,
 	LocationsFields,
 	ReverseProxyAdvancedPanel,
@@ -19,9 +20,11 @@ import {
 	normalizeReverseProxyAdvanced,
 	normalizeResponseOptimization,
 	normalizeAccessLog,
+	normalizeErrorHandling,
 	withReverseProxyDefaults,
 	withResponseOptimizationDefaults,
 	withAccessLogDefaults,
+	withErrorHandlingDefaults,
 } from "src/components";
 import { type ForwardAuthProviderID, forwardAuthProviders } from "src/forwardAuthProviders";
 import { useAutheliaSettings, useAuthentikSettings, useProxyHost, useSetProxyHost } from "src/hooks";
@@ -292,6 +295,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 		const reverseProxy = normalizeReverseProxyAdvanced(values.reverseProxy);
 		const response = normalizeResponseOptimization(values.response, "public, max-age=300");
 		const accessLog = normalizeAccessLog(values.accessLog);
+		const errorHandling = normalizeErrorHandling(values.errorHandling);
 
 		const payload = {
 			...values,
@@ -309,6 +313,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 			reverseProxy,
 			response,
 			accessLog,
+			errorHandling,
 			upstreamInsecureSkipVerify: !!reverseProxy.transport?.tlsInsecureSkipVerify,
 			certificateId:
 				values.sslForced && values.meta?.certificateBindings?.length
@@ -406,6 +411,9 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 									"public, max-age=300",
 								),
 								accessLog: withAccessLogDefaults(initialData?.accessLog ?? data?.accessLog),
+								errorHandling: withErrorHandlingDefaults(
+									initialData?.errorHandling ?? data?.errorHandling,
+								),
 								meta: initialData?.meta ?? data?.meta ?? {},
 							} as any
 						}
@@ -619,6 +627,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 														color="bg-lime"
 														defaultCacheControl="public, max-age=300"
 													/>
+													<h4 className="py-2 mt-4">错误处理</h4>
+													<ErrorHandlingFields color="bg-lime" />
 													<h4 className="py-2 mt-4">访问日志</h4>
 													<AccessLogFields color="bg-lime" />
 												</div>

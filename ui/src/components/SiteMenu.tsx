@@ -1,10 +1,12 @@
 import {
+	IconActivityHeartbeat,
 	IconDeviceDesktop,
 	IconDeviceDesktopBolt,
 	IconGlobe,
 	IconHome,
 	IconLock,
 	IconSettings,
+	IconTemplate,
 } from "@tabler/icons-react";
 import cn from "classnames";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -117,6 +119,16 @@ const menuItems: MenuItem[] = [
 		],
 	},
 	{
+		icon: IconTemplate,
+		label: "site-resources",
+		items: [
+			{
+				to: "/caddy/error-response-templates",
+				label: "error-response-templates",
+			},
+		],
+	},
+	{
 		icon: IconGlobe,
 		label: "domain-certificates",
 		items: [
@@ -137,6 +149,11 @@ const menuItems: MenuItem[] = [
 				label: "credentials-settings",
 			},
 		],
+	},
+	{
+		to: "/caddy/observability",
+		icon: IconActivityHeartbeat,
+		label: "observability",
 	},
 	{
 		icon: IconLock,

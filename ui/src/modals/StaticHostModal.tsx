@@ -10,12 +10,15 @@ import {
 	Button,
 	DomainCertificateBindingsField,
 	DomainNamesField,
+	ErrorHandlingFields,
 	Loading,
 	ResponseOptimizationFields,
 	SSLOptionsFields,
 	normalizeAccessLog,
+	normalizeErrorHandling,
 	normalizeResponseOptimization,
 	withAccessLogDefaults,
+	withErrorHandlingDefaults,
 	withResponseOptimizationDefaults,
 } from "src/components";
 import { useConfirmClose } from "src/hooks/useConfirmClose";
@@ -129,6 +132,7 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 			accessListId: Number(values.accessListId || 0),
 			response: normalizeResponseOptimization(values.response, "public, max-age=3600"),
 			accessLog: normalizeAccessLog(values.accessLog),
+			errorHandling: normalizeErrorHandling(values.errorHandling),
 			certificateId:
 				values.sslForced && values.meta?.certificateBindings?.length
 					? -1
@@ -186,6 +190,9 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 									"public, max-age=3600",
 								),
 								accessLog: withAccessLogDefaults(initialData?.accessLog ?? data?.accessLog),
+								errorHandling: withErrorHandlingDefaults(
+									initialData?.errorHandling ?? data?.errorHandling,
+								),
 								meta: initialData?.meta ?? data?.meta ?? {},
 							} as any
 						}
@@ -432,6 +439,8 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 														color="bg-cyan"
 														defaultCacheControl="public, max-age=3600"
 													/>
+													<h4 className="py-2 mt-4">错误处理</h4>
+													<ErrorHandlingFields color="bg-cyan" />
 													<h4 className="py-2 mt-4">访问日志</h4>
 													<AccessLogFields color="bg-cyan" />
 												</div>

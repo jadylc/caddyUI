@@ -6,6 +6,7 @@ export * from "./CertificateAuthorityFields";
 export * from "./DNSProviderFields";
 export * from "./DomainCertificateBindingsField";
 export * from "./DomainNamesField";
+export * from "./ErrorHandlingFields";
 export * from "./LocationsFields";
 export * from "./ReverseProxyAdvancedPanel";
 export * from "./ResponseOptimizationFields";
