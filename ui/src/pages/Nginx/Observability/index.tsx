@@ -63,7 +63,7 @@ function upstreamText(status: string) {
 		case "unhealthy":
 			return "异常";
 		default:
-			return "未知";
+			return "未检测";
 	}
 }
 
@@ -234,7 +234,18 @@ export default function ObservabilityPage() {
 	if (isError) return <Alert variant="danger">{error?.message || "加载运行观测失败"}</Alert>;
 	if (!data) return null;
 
-	const unhealthyUpstreams = data.upstreams.filter((item) => !item.healthy).length;
+	const healthyUpstreams = data.upstreams.filter((item) => item.status === "healthy").length;
+	const unhealthyUpstreams = data.upstreams.filter((item) => item.status === "unhealthy").length;
+	const unknownUpstreams = data.upstreams.filter((item) => item.status === "unknown").length;
+	const upstreamSubtitle = data.upstreams.length
+		? [
+				unhealthyUpstreams ? `${fmtNumber(unhealthyUpstreams)} 个异常` : "",
+				unknownUpstreams ? `${fmtNumber(unknownUpstreams)} 个未检测` : "",
+				!unhealthyUpstreams && !unknownUpstreams ? "全部已验证正常" : "",
+			]
+				.filter(Boolean)
+				.join("，")
+		: "暂无上游";
 
 	return (
 		<div>
@@ -256,9 +267,9 @@ export default function ObservabilityPage() {
 
 			<div className="row row-cards mb-3">
 				<MetricCard
-					title="当前 QPS"
+					title="业务 QPS"
 					value={fmtDecimal(data.traffic.qps)}
-					subtitle={`累计 ${fmtNumber(data.traffic.totalRequests)} 次请求`}
+					subtitle={`累计 ${fmtNumber(data.traffic.totalRequests)} 次请求，不含管理面板`}
 					icon={<IconActivityHeartbeat size={24} />}
 					color="bg-azure"
 				/>
@@ -271,10 +282,10 @@ export default function ObservabilityPage() {
 				/>
 				<MetricCard
 					title="上游状态"
-					value={`${fmtNumber(data.upstreams.length - unhealthyUpstreams)} / ${fmtNumber(data.upstreams.length)}`}
-					subtitle={unhealthyUpstreams ? `${unhealthyUpstreams} 个异常` : "全部正常或暂无上游"}
+					value={`${fmtNumber(healthyUpstreams)} / ${fmtNumber(data.upstreams.length)}`}
+					subtitle={upstreamSubtitle}
 					icon={<IconServer size={24} />}
-					color={unhealthyUpstreams ? "bg-red" : "bg-indigo"}
+					color={unhealthyUpstreams ? "bg-red" : unknownUpstreams ? "bg-secondary" : "bg-indigo"}
 				/>
 				<MetricCard
 					title="错误趋势"
@@ -299,7 +310,7 @@ export default function ObservabilityPage() {
 				<div className="col-lg-7">
 					<div className="card">
 						<div className="card-header">
-							<h3 className="card-title">上游健康</h3>
+							<h3 className="card-title">上游状态</h3>
 						</div>
 						<div className="table-responsive">
 							<table className="table card-table table-vcenter">
@@ -324,7 +335,7 @@ export default function ObservabilityPage() {
 									) : (
 										<tr>
 											<td colSpan={2} className="text-center text-muted py-4">
-												暂无上游健康数据
+												暂无上游状态数据
 											</td>
 										</tr>
 									)}

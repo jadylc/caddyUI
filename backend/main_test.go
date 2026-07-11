@@ -224,7 +224,7 @@ caddy_config_last_reload_successful 1
 `)
 	var overview observabilityOverview
 
-	applyObservabilityMetrics(&overview, samples, time.Unix(100, 0))
+	applyObservabilityMetrics(&overview, samples, time.Unix(100, 0), caddyRuntimeExclusions{})
 
 	if overview.Traffic.TotalRequests != 10 {
 		t.Fatalf("TotalRequests = %d, want 10", overview.Traffic.TotalRequests)
@@ -249,9 +249,107 @@ caddy_config_last_reload_successful 1
 	}
 
 	samples = parsePrometheusText(`caddy_http_requests_total{handler="subroute",server="srv1"} 16`)
-	applyObservabilityMetrics(&overview, samples, time.Unix(102, 0))
+	applyObservabilityMetrics(&overview, samples, time.Unix(102, 0), caddyRuntimeExclusions{})
 	if overview.Traffic.QPS != 3 {
 		t.Fatalf("QPS = %v, want 3", overview.Traffic.QPS)
+	}
+}
+
+func TestApplyObservabilityMetricsExcludesManagementTraffic(t *testing.T) {
+	observabilityRate.Lock()
+	observabilityRate.initialized = false
+	observabilityRate.total = 0
+	observabilityRate.qps = 0
+	observabilityRate.collectedAt = time.Time{}
+	observabilityRate.Unlock()
+
+	samples := parsePrometheusText(`
+caddy_http_requests_total{handler="subroute",server="srv0"} 7
+caddy_http_requests_total{handler="subroute",server="srv1"} 50
+caddy_http_response_duration_seconds_count{code="200",handler="subroute",method="GET",server="srv0"} 7
+caddy_http_response_duration_seconds_count{code="200",handler="subroute",method="GET",server="srv1"} 50
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv0",le="0.025"} 7
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv0",le="+Inf"} 7
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv1",le="0.5"} 50
+caddy_http_response_duration_seconds_bucket{code="200",handler="subroute",method="GET",server="srv1",le="+Inf"} 50
+caddy_reverse_proxy_upstreams_healthy{upstream="127.0.0.1:9001"} 1
+caddy_reverse_proxy_upstreams_healthy{upstream="8.8.8.8:80"} 1
+`)
+	var overview observabilityOverview
+
+	applyObservabilityMetrics(&overview, samples, time.Unix(100, 0), caddyRuntimeExclusions{
+		Servers:   map[string]bool{"srv1": true},
+		Upstreams: map[string]bool{"127.0.0.1:9001": true},
+	})
+
+	if overview.Traffic.TotalRequests != 7 {
+		t.Fatalf("TotalRequests = %d, want business-only 7", overview.Traffic.TotalRequests)
+	}
+	if overview.Traffic.P95MS != 25 {
+		t.Fatalf("P95MS = %v, want business-only 25", overview.Traffic.P95MS)
+	}
+	if len(overview.Upstreams) != 1 || overview.Upstreams[0].Address != "8.8.8.8:80" {
+		t.Fatalf("Upstreams = %#v, want only business upstream", overview.Upstreams)
+	}
+}
+
+func TestApplyUpstreamVerificationStatusMarksUncheckedHealthyAsUnknown(t *testing.T) {
+	upstreams := []observabilityUpstream{
+		{Address: "8.8.8.8:80", Healthy: true, Status: "healthy"},
+		{Address: "10.0.0.2:8080", Healthy: true, Status: "healthy"},
+		{Address: "10.0.0.3:8080", Healthy: false, Status: "unhealthy"},
+	}
+
+	applyUpstreamVerificationStatus(upstreams, map[string]bool{"10.0.0.2:8080": true})
+
+	if upstreams[0].Healthy || upstreams[0].Status != "unknown" {
+		t.Fatalf("unchecked upstream = %#v, want unknown", upstreams[0])
+	}
+	if !upstreams[1].Healthy || upstreams[1].Status != "healthy" {
+		t.Fatalf("actively checked upstream = %#v, want healthy", upstreams[1])
+	}
+	if upstreams[2].Healthy || upstreams[2].Status != "unhealthy" {
+		t.Fatalf("unhealthy upstream = %#v, want unchanged unhealthy", upstreams[2])
+	}
+}
+
+func TestActiveHealthCheckUpstreamsUsesSiteAndCustomLocationConfig(t *testing.T) {
+	sites := []Site{{
+		Name:    "app",
+		Kind:    "proxy",
+		Backend: "http://10.0.0.1:8080",
+		ReverseProxy: ReverseProxyAdvancedConfig{HealthCheck: ReverseProxyHealthCheckConfig{
+			Enabled: true,
+			URI:     "/health",
+		}},
+		Locations: []ProxyLocation{{
+			Path:             "/api",
+			Backend:          "http://10.0.0.2:8080",
+			ReverseProxyMode: "custom",
+			ReverseProxy: ReverseProxyAdvancedConfig{HealthCheck: ReverseProxyHealthCheckConfig{
+				Enabled: true,
+			}},
+		}, {
+			Path:             "/admin",
+			Backend:          "http://10.0.0.3:8080",
+			ReverseProxyMode: "custom",
+			ReverseProxy: ReverseProxyAdvancedConfig{HealthCheck: ReverseProxyHealthCheckConfig{
+				Enabled: true,
+				URI:     "/health",
+			}},
+		}},
+	}}
+
+	checked := activeHealthCheckUpstreams(sites)
+
+	if !checked["10.0.0.1:8080"] {
+		t.Fatalf("checked = %#v, want site upstream", checked)
+	}
+	if checked["10.0.0.2:8080"] {
+		t.Fatalf("checked = %#v, custom location without health URI should not be active", checked)
+	}
+	if !checked["10.0.0.3:8080"] {
+		t.Fatalf("checked = %#v, want custom location upstream", checked)
 	}
 }
 
@@ -300,6 +398,20 @@ func TestParseRuntimeLogEventSkipsLowLevelConfigFormattingWarning(t *testing.T) 
 
 	if event, ok := parseRuntimeLogEvent(line); ok {
 		t.Fatalf("parseRuntimeLogEvent = %#v, want skipped", event)
+	}
+}
+
+func TestObservabilityEventWithinWindowSkipsStaleEvents(t *testing.T) {
+	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.Local)
+
+	if observabilityEventWithinWindow(observabilityLogEvent{Time: "2026-07-09 09:59:59"}, now, 24*time.Hour) {
+		t.Fatalf("stale event should be skipped")
+	}
+	if !observabilityEventWithinWindow(observabilityLogEvent{Time: "2026-07-11 09:59:59"}, now, 24*time.Hour) {
+		t.Fatalf("recent event should be included")
+	}
+	if !observabilityEventWithinWindow(observabilityLogEvent{}, now, 24*time.Hour) {
+		t.Fatalf("event without timestamp should be included")
 	}
 }
 

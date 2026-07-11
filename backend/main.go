@@ -12290,6 +12290,11 @@ type prometheusSample struct {
 	Value  float64
 }
 
+type caddyRuntimeExclusions struct {
+	Servers   map[string]bool
+	Upstreams map[string]bool
+}
+
 type accessLogObservation struct {
 	At              time.Time
 	Status          int
@@ -12315,7 +12320,7 @@ func observabilityHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func collectObservabilityOverview(now time.Time) observabilityOverview {
-	recentErrors := readRuntimeLogEvents(20)
+	recentErrors := readRuntimeLogEvents(20, now, 24*time.Hour)
 	overview := observabilityOverview{
 		CollectedAt:  localTimestamp(now),
 		Available:    true,
@@ -12329,11 +12334,12 @@ func collectObservabilityOverview(now time.Time) observabilityOverview {
 		overview.Error = err.Error()
 	} else {
 		samples := parsePrometheusText(metricsText)
-		applyObservabilityMetrics(&overview, samples, now)
+		applyObservabilityMetrics(&overview, samples, now, fetchCaddyRuntimeExclusions())
 	}
 
 	sites, err := readAllSites()
 	if err == nil {
+		applyUpstreamVerificationStatus(overview.Upstreams, activeHealthCheckUpstreams(sites))
 		overview.Sites = buildSiteObservability(sites, upstreamStatusMap(overview.Upstreams))
 	} else if overview.Error == "" {
 		overview.Error = err.Error()
@@ -12362,7 +12368,7 @@ func fetchCaddyMetrics() (string, error) {
 	return string(data), nil
 }
 
-func applyObservabilityMetrics(overview *observabilityOverview, samples []prometheusSample, now time.Time) {
+func applyObservabilityMetrics(overview *observabilityOverview, samples []prometheusSample, now time.Time, exclusions caddyRuntimeExclusions) {
 	statusClasses := emptyStatusClasses()
 	methods := map[string]int64{}
 	buckets := map[float64]float64{}
@@ -12373,6 +12379,9 @@ func applyObservabilityMetrics(overview *observabilityOverview, samples []promet
 	reload := observabilityReload{}
 
 	for _, sample := range samples {
+		if isExcludedMetricServer(sample, exclusions.Servers) {
+			continue
+		}
 		switch sample.Name {
 		case "caddy_http_requests_total":
 			requestTotal += sample.Value
@@ -12393,6 +12402,9 @@ func applyObservabilityMetrics(overview *observabilityOverview, samples []promet
 		case "caddy_reverse_proxy_upstreams_healthy":
 			address := strings.TrimSpace(sample.Labels["upstream"])
 			if address == "" {
+				continue
+			}
+			if exclusions.Upstreams[normalizeUpstreamAddress(address)] {
 				continue
 			}
 			healthy := sample.Value >= 1
@@ -12421,6 +12433,105 @@ func applyObservabilityMetrics(overview *observabilityOverview, samples []promet
 		StatusClasses: statusClasses,
 		Methods:       methods,
 	}
+}
+
+func isExcludedMetricServer(sample prometheusSample, excludedServers map[string]bool) bool {
+	if len(excludedServers) == 0 {
+		return false
+	}
+	switch sample.Name {
+	case "caddy_http_requests_total", "caddy_http_requests_in_flight", "caddy_http_response_duration_seconds_count", "caddy_http_response_duration_seconds_bucket":
+		return excludedServers[strings.TrimSpace(sample.Labels["server"])]
+	default:
+		return false
+	}
+}
+
+func fetchCaddyRuntimeExclusions() caddyRuntimeExclusions {
+	out := caddyRuntimeExclusions{Servers: map[string]bool{}, Upstreams: map[string]bool{}}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(caddyAdmin, "/")+"/config/apps/http/servers", nil)
+	if err != nil {
+		return out
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return out
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return out
+	}
+	var servers map[string]struct {
+		Listen []string `json:"listen"`
+	}
+	if err := json.Unmarshal(data, &servers); err != nil {
+		return out
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		raw = map[string]any{}
+	}
+	for name, server := range servers {
+		if !isManagementHTTPServer(server.Listen) {
+			continue
+		}
+		out.Servers[name] = true
+		if serverRaw, ok := raw[name]; ok {
+			for _, upstream := range collectCaddyDials(serverRaw) {
+				out.Upstreams[normalizeUpstreamAddress(upstream)] = true
+			}
+		}
+	}
+	return out
+}
+
+func isManagementHTTPServer(listeners []string) bool {
+	for _, listener := range listeners {
+		if listenerPort(listener) == "8888" {
+			return true
+		}
+	}
+	return false
+}
+
+func listenerPort(listener string) string {
+	listener = strings.TrimSpace(listener)
+	if listener == "" {
+		return ""
+	}
+	if _, port, err := net.SplitHostPort(listener); err == nil {
+		return port
+	}
+	if strings.HasPrefix(listener, ":") {
+		return strings.TrimPrefix(listener, ":")
+	}
+	if idx := strings.LastIndex(listener, ":"); idx >= 0 && idx < len(listener)-1 {
+		return listener[idx+1:]
+	}
+	return ""
+}
+
+func collectCaddyDials(value any) []string {
+	out := []string{}
+	switch v := value.(type) {
+	case map[string]any:
+		for key, next := range v {
+			if key == "dial" {
+				if dial := stringFromAny(next); dial != "" {
+					out = append(out, dial)
+				}
+				continue
+			}
+			out = append(out, collectCaddyDials(next)...)
+		}
+	case []any:
+		for _, next := range v {
+			out = append(out, collectCaddyDials(next)...)
+		}
+	}
+	return uniqueSortedStrings(out)
 }
 
 func updateObservabilityQPS(total int64, now time.Time) float64 {
@@ -12479,6 +12590,60 @@ func upstreamStatusMap(items []observabilityUpstream) map[string]string {
 		out[normalizeUpstreamAddress(item.Address)] = status
 	}
 	return out
+}
+
+func applyUpstreamVerificationStatus(items []observabilityUpstream, activelyChecked map[string]bool) {
+	for idx := range items {
+		if items[idx].Status != "healthy" {
+			continue
+		}
+		if activelyChecked[normalizeUpstreamAddress(items[idx].Address)] {
+			continue
+		}
+		items[idx].Healthy = false
+		items[idx].Status = "unknown"
+	}
+}
+
+func activeHealthCheckUpstreams(sites []Site) map[string]bool {
+	out := map[string]bool{}
+	for _, site := range sites {
+		if site.Disabled || defaultString(site.Kind, "proxy") != "proxy" {
+			continue
+		}
+		if reverseProxyActiveHealthCheckEnabled(site.ReverseProxy.HealthCheck) {
+			addObservedUpstreams(out, normalizeProxyUpstreams(site.Upstreams, site.Backend))
+		}
+		for _, loc := range site.Locations {
+			advanced := site.ReverseProxy
+			if loc.ReverseProxyMode == "custom" {
+				advanced = loc.ReverseProxy
+			}
+			if !reverseProxyActiveHealthCheckEnabled(advanced.HealthCheck) {
+				continue
+			}
+			fallback := loc.Backend
+			if fallback == "" {
+				fallback = site.Backend
+			}
+			addObservedUpstreams(out, normalizeProxyUpstreams(loc.Upstreams, fallback))
+		}
+	}
+	return out
+}
+
+func reverseProxyActiveHealthCheckEnabled(cfg ReverseProxyHealthCheckConfig) bool {
+	cfg = normalizeReverseProxyAdvancedConfig(ReverseProxyAdvancedConfig{HealthCheck: cfg}).HealthCheck
+	return cfg.Enabled && cfg.URI != ""
+}
+
+func addObservedUpstreams(out map[string]bool, upstreams []ProxyUpstream) {
+	for _, upstream := range upstreams {
+		address := normalizeUpstreamAddress(proxyUpstreamHostPort(upstream.Backend))
+		if address != "" {
+			out[address] = true
+		}
+	}
 }
 
 func buildSiteObservability(sites []Site, upstreamStatuses map[string]string) []observabilitySite {
@@ -12605,7 +12770,7 @@ func parseAccessLogObservation(line string) (accessLogObservation, bool) {
 	return obs, true
 }
 
-func readRuntimeLogEvents(limit int) []observabilityLogEvent {
+func readRuntimeLogEvents(limit int, now time.Time, window time.Duration) []observabilityLogEvent {
 	data, err := os.ReadFile(logFile)
 	if err != nil {
 		return []observabilityLogEvent{}
@@ -12614,6 +12779,9 @@ func readRuntimeLogEvents(limit int) []observabilityLogEvent {
 	out := []observabilityLogEvent{}
 	for _, line := range lines {
 		if ev, ok := parseRuntimeLogEvent(line); ok {
+			if !observabilityEventWithinWindow(ev, now, window) {
+				continue
+			}
 			out = append(out, ev)
 		}
 	}
@@ -12622,6 +12790,18 @@ func readRuntimeLogEvents(limit int) []observabilityLogEvent {
 	}
 	reverseLogEvents(out)
 	return out
+}
+
+func observabilityEventWithinWindow(event observabilityLogEvent, now time.Time, window time.Duration) bool {
+	if window <= 0 || event.Time == "" {
+		return true
+	}
+	at, ok := parseLocalOrRFC3339Time(event.Time)
+	if !ok {
+		return true
+	}
+	age := now.Sub(at)
+	return age >= 0 && age <= window
 }
 
 func parseRuntimeLogEvent(line string) (observabilityLogEvent, bool) {
@@ -12633,7 +12813,7 @@ func parseRuntimeLogEvent(line string) (observabilityLogEvent, bool) {
 	var raw map[string]any
 	if json.Unmarshal([]byte(line), &raw) == nil {
 		level := strings.ToLower(strings.TrimSpace(stringFromAny(raw["level"])))
-		if level != "error" && level != "warn" && level != "warning" {
+		if level != "error" {
 			return observabilityLogEvent{}, false
 		}
 		msg := stringFromAny(raw["msg"])
@@ -12668,8 +12848,6 @@ func parseRuntimeLogEvent(line string) (observabilityLogEvent, bool) {
 	switch {
 	case strings.Contains(lower, "level=error"), strings.Contains(lower, "[error]"), strings.Contains(lower, " error "):
 		level = "error"
-	case strings.Contains(lower, "level=warn"), strings.Contains(lower, "level=warning"), strings.Contains(lower, "[warn]"):
-		level = "warn"
 	default:
 		return observabilityLogEvent{}, false
 	}
