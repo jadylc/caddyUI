@@ -2,7 +2,13 @@ import { IconPlus, IconTrash } from "@tabler/icons-react";
 import cn from "classnames";
 import { Field, getIn, useFormikContext } from "formik";
 import type { ReactNode } from "react";
-import type { ProxyHeaderRule, ReverseProxyAdvancedConfig } from "src/api/backend";
+import type {
+	ErrorResponseTemplate,
+	ProxyHeaderRule,
+	ReverseProxyAdvancedConfig,
+	ReverseProxyInterceptionRule,
+} from "src/api/backend";
+import { useErrorResponseTemplates } from "src/hooks";
 
 interface Props {
 	name?: string;
@@ -11,6 +17,20 @@ interface Props {
 }
 
 const blankHeaderRule = (): ProxyHeaderRule => ({ action: "set", name: "", value: "" });
+
+const blankInterceptionRule = (id: number): ReverseProxyInterceptionRule => ({
+	id,
+	statuses: ["404"],
+	headerName: "",
+	headerValue: "",
+	action: "error_page_template",
+	templateId: 0,
+	redirectUrl: "",
+	redirectCode: 302,
+	statusCode: 200,
+	body: "",
+	headers: [],
+});
 
 export const blankReverseProxyAdvanced = (): ReverseProxyAdvancedConfig => ({
 	healthCheck: {
@@ -46,6 +66,10 @@ export const blankReverseProxyAdvanced = (): ReverseProxyAdvancedConfig => ({
 		readTimeout: "",
 		writeTimeout: "",
 	},
+	interception: {
+		enabled: false,
+		rules: [],
+	},
 });
 
 export const withReverseProxyDefaults = (value?: ReverseProxyAdvancedConfig, legacyInsecureSkipVerify = false) => {
@@ -74,6 +98,11 @@ export const withReverseProxyDefaults = (value?: ReverseProxyAdvancedConfig, leg
 			...(value?.transport ?? {}),
 			tlsInsecureSkipVerify: legacyInsecureSkipVerify || !!value?.transport?.tlsInsecureSkipVerify,
 		},
+		interception: {
+			...blank.interception,
+			...(value?.interception ?? {}),
+			rules: Array.isArray(value?.interception?.rules) ? value.interception.rules : [],
+		},
 	} as ReverseProxyAdvancedConfig;
 };
 
@@ -84,6 +113,7 @@ export const normalizeReverseProxyAdvanced = (value?: ReverseProxyAdvancedConfig
 	const activeHealthEnabled = !!cfg.healthCheck?.enabled;
 	const passiveHealthEnabled = !!cfg.healthCheck?.passiveEnabled;
 	const retryEnabled = !!cfg.retry?.enabled;
+	const interceptionEnabled = !!cfg.interception?.enabled;
 	return {
 		healthCheck: {
 			enabled: activeHealthEnabled,
@@ -121,6 +151,10 @@ export const normalizeReverseProxyAdvanced = (value?: ReverseProxyAdvancedConfig
 			readTimeout: cleanString(cfg.transport?.readTimeout),
 			writeTimeout: cleanString(cfg.transport?.writeTimeout),
 		},
+		interception: {
+			enabled: interceptionEnabled,
+			rules: interceptionEnabled ? normalizeInterceptionRules(cfg.interception?.rules) : [],
+		},
 	} as ReverseProxyAdvancedConfig;
 };
 
@@ -139,6 +173,40 @@ const normalizeHeaderRules = (rules?: ProxyHeaderRule[]) =>
 			value: cleanString(rule.value),
 		}))
 		.filter((rule) => rule.name);
+
+const normalizeInterceptionRules = (rules?: ReverseProxyInterceptionRule[]) =>
+	(Array.isArray(rules) ? rules : [])
+		.map((rule, index) => ({
+			id: index + 1,
+			statuses: normalizeStatuses(rule.statuses),
+			headerName: cleanString(rule.headerName),
+			headerValue: cleanString(rule.headerValue),
+			action: normalizeInterceptionAction(rule.action),
+			templateId: Number(rule.templateId || 0),
+			redirectUrl: cleanString(rule.redirectUrl),
+			redirectCode: Number(rule.redirectCode || 302),
+			statusCode: Number(rule.statusCode || 200),
+			body: cleanString(rule.body),
+			headers: normalizeHeaderRules(rule.headers),
+		}))
+		.filter((rule) => rule.statuses.length || rule.headerName);
+
+const normalizeStatuses = (statuses?: string[]) =>
+	(Array.isArray(statuses) ? statuses : [])
+		.map((status) => cleanString(status).toLowerCase())
+		.filter(Boolean)
+		.filter((status, index, list) => list.indexOf(status) === index);
+
+const normalizeInterceptionAction = (action?: string) => {
+	switch (action) {
+		case "redirect":
+		case "respond":
+		case "headers":
+			return action;
+		default:
+			return "error_page_template";
+	}
+};
 
 const durationOptions = [
 	{ value: "", label: "默认" },
@@ -343,6 +411,252 @@ function HeaderRules({ name, label }: { name: string; label: string }) {
 	);
 }
 
+const statusText = (statuses?: string[]) => (statuses || []).join(", ");
+
+const parseStatusText = (value: string) =>
+	value
+		.split(/[,\s]+/)
+		.map((item) => item.trim().toLowerCase())
+		.filter(Boolean)
+		.filter((item, index, list) => list.indexOf(item) === index);
+
+function InterceptionHeaderRules({ name }: { name: string }) {
+	const { values, setFieldValue } = useFormikContext<any>();
+	const rules = (getIn(values, name) as ProxyHeaderRule[] | undefined) ?? [];
+	const setRules = (next: ProxyHeaderRule[]) => setFieldValue(name, next);
+	const handleChange = (idx: number, field: keyof ProxyHeaderRule, value: string) => {
+		setRules(rules.map((rule, ruleIdx) => (ruleIdx === idx ? { ...rule, [field]: value } : rule)));
+	};
+	return (
+		<div className="d-flex flex-column gap-2">
+			{rules.map((rule, idx) => (
+				<div className="row g-2 align-items-end" key={idx}>
+					<div className="col-md-2">
+						<select
+							className="form-control"
+							value={rule.action === "delete" ? "delete" : "set"}
+							onChange={(event) => handleChange(idx, "action", event.target.value)}
+						>
+							<option value="set">设置</option>
+							<option value="delete">删除</option>
+						</select>
+					</div>
+					<div className="col-md-4">
+						<input
+							type="text"
+							className="form-control"
+							placeholder="Header-Name"
+							value={rule.name || ""}
+							onChange={(event) => handleChange(idx, "name", event.target.value)}
+						/>
+					</div>
+					<div className="col-md-5">
+						<input
+							type="text"
+							className="form-control"
+							placeholder={rule.action === "delete" ? "" : "value"}
+							value={rule.value || ""}
+							disabled={rule.action === "delete"}
+							onChange={(event) => handleChange(idx, "value", event.target.value)}
+						/>
+					</div>
+					<div className="col-md-1">
+						<button
+							type="button"
+							className="btn btn-icon"
+							onClick={() => setRules(rules.filter((_, ruleIdx) => ruleIdx !== idx))}
+							title="删除头规则"
+						>
+							<IconTrash size={16} />
+						</button>
+					</div>
+				</div>
+			))}
+			<button type="button" className="btn btn-sm align-self-start" onClick={() => setRules([...rules, blankHeaderRule()])}>
+				<IconPlus size={16} />
+				添加 Header
+			</button>
+		</div>
+	);
+}
+
+function InterceptionRuleTarget({
+	name,
+	rule,
+	templates,
+}: {
+	name: string;
+	rule: ReverseProxyInterceptionRule;
+	templates?: ErrorResponseTemplate[];
+}) {
+	switch (rule.action) {
+		case "redirect":
+			return (
+				<div className="row g-2">
+					<div className="col-md-8">
+						<label className="form-label" htmlFor={`${name}-redirect-url`}>
+							跳转地址
+						</label>
+						<Field
+							id={`${name}-redirect-url`}
+							name={`${name}.redirectUrl`}
+							className="form-control"
+							placeholder="https://login.example.com"
+						/>
+					</div>
+					<div className="col-md-4">
+						<label className="form-label" htmlFor={`${name}-redirect-code`}>
+							状态码
+						</label>
+						<Field as="select" id={`${name}-redirect-code`} name={`${name}.redirectCode`} className="form-select">
+							<option value={301}>301</option>
+							<option value={302}>302</option>
+							<option value={307}>307</option>
+							<option value={308}>308</option>
+						</Field>
+					</div>
+				</div>
+			);
+		case "respond":
+			return (
+				<div className="row g-2">
+					<div className="col-md-3">
+						<label className="form-label" htmlFor={`${name}-status-code`}>
+							状态码
+						</label>
+						<Field id={`${name}-status-code`} name={`${name}.statusCode`} type="number" min={100} className="form-control" />
+					</div>
+					<div className="col-md-9">
+						<label className="form-label" htmlFor={`${name}-body`}>
+							响应内容
+						</label>
+						<Field id={`${name}-body`} name={`${name}.body`} className="form-control" />
+					</div>
+				</div>
+			);
+		case "headers":
+			return <InterceptionHeaderRules name={`${name}.headers`} />;
+		default:
+			return (
+				<div>
+					<label className="form-label" htmlFor={`${name}-template`}>
+						错误页模板
+					</label>
+					<Field as="select" id={`${name}-template`} name={`${name}.templateId`} className="form-select">
+						<option value={0}>选择模板</option>
+						{(templates || []).map((template) => (
+							<option key={template.id} value={template.id}>
+								{template.name}
+								{template.enabled ? "" : "（停用）"}
+							</option>
+						))}
+					</Field>
+				</div>
+			);
+	}
+}
+
+function InterceptionRules({ name }: { name: string }) {
+	const { values, setFieldValue } = useFormikContext<any>();
+	const { data: templates } = useErrorResponseTemplates();
+	const rules = (getIn(values, name) as ReverseProxyInterceptionRule[] | undefined) ?? [];
+	const setRules = (next: ReverseProxyInterceptionRule[]) => setFieldValue(name, next);
+	const handleChange = (idx: number, patch: Partial<ReverseProxyInterceptionRule>) => {
+		setRules(rules.map((rule, ruleIdx) => (ruleIdx === idx ? { ...rule, ...patch } : rule)));
+	};
+	return (
+		<div>
+			<div className="d-flex align-items-center justify-content-between mb-2">
+				<div className="form-label m-0">规则</div>
+				<button
+					type="button"
+					className="btn btn-sm"
+					onClick={() => setRules([...rules, blankInterceptionRule(rules.length + 1)])}
+					title="添加响应拦截规则"
+				>
+					<IconPlus size={16} />
+					添加
+				</button>
+			</div>
+			{rules.length === 0 ? <div className="text-secondary small mb-2">暂无规则</div> : null}
+			<div className="d-grid gap-3">
+				{rules.map((rule, idx) => (
+					<div className="border rounded p-3" key={rule.id || idx}>
+						<div className="row g-2 align-items-end mb-3">
+							<div className="col-md-3">
+								<label className="form-label" htmlFor={`${name}-${idx}-statuses`}>
+									状态码
+								</label>
+								<input
+									id={`${name}-${idx}-statuses`}
+									type="text"
+									className="form-control"
+									placeholder="401, 403, 5xx"
+									value={statusText(rule.statuses)}
+									onChange={(event) => handleChange(idx, { statuses: parseStatusText(event.target.value) })}
+								/>
+							</div>
+							<div className="col-md-3">
+								<label className="form-label" htmlFor={`${name}-${idx}-header-name`}>
+									Header
+								</label>
+								<input
+									id={`${name}-${idx}-header-name`}
+									type="text"
+									className="form-control"
+									placeholder="X-Upstream-State"
+									value={rule.headerName || ""}
+									onChange={(event) => handleChange(idx, { headerName: event.target.value })}
+								/>
+							</div>
+							<div className="col-md-3">
+								<label className="form-label" htmlFor={`${name}-${idx}-header-value`}>
+									Header 值
+								</label>
+								<input
+									id={`${name}-${idx}-header-value`}
+									type="text"
+									className="form-control"
+									placeholder="可留空"
+									value={rule.headerValue || ""}
+									onChange={(event) => handleChange(idx, { headerValue: event.target.value })}
+								/>
+							</div>
+							<div className="col-md-2">
+								<label className="form-label" htmlFor={`${name}-${idx}-action`}>
+									动作
+								</label>
+								<select
+									id={`${name}-${idx}-action`}
+									className="form-select"
+									value={rule.action || "error_page_template"}
+									onChange={(event) => handleChange(idx, { action: event.target.value as any })}
+								>
+									<option value="error_page_template">错误页模板</option>
+									<option value="redirect">重定向</option>
+									<option value="respond">固定响应</option>
+									<option value="headers">改 Header</option>
+								</select>
+							</div>
+							<div className="col-md-1 text-end">
+								<button
+									type="button"
+									className="btn btn-icon"
+									onClick={() => setRules(rules.filter((_, ruleIdx) => ruleIdx !== idx))}
+									title="删除响应拦截规则"
+								>
+									<IconTrash size={16} />
+								</button>
+							</div>
+						</div>
+						<InterceptionRuleTarget name={`${name}.${idx}`} rule={rule} templates={templates} />
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
 export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = false, inheritNote }: Props) {
 	const { values } = useFormikContext<any>();
 	const cfg = withReverseProxyDefaults(getIn(values, name));
@@ -350,6 +664,7 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 	const passiveHealthEnabled = !!cfg.healthCheck?.passiveEnabled;
 	const retryEnabled = !!cfg.retry?.enabled;
 	const customHostEnabled = cfg.headers?.hostMode === "custom";
+	const interceptionEnabled = !!cfg.interception?.enabled;
 	const reverseProxySuffix = ".reverseProxy";
 	const ownerPath = name.endsWith(reverseProxySuffix) ? name.slice(0, -reverseProxySuffix.length) : "";
 	const upstreamsPath = ownerPath ? `${ownerPath}.upstreams` : "upstreams";
@@ -377,6 +692,8 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 	const headerRuleCount = (cfg.headers?.request?.length || 0) + (cfg.headers?.response?.length || 0);
 	const headerSummary = cfg.headers?.hostMode || headerRuleCount > 0 ? "已配置" : "默认";
 	const transportSummary = hasConnectionSettings ? "已配置" : "默认";
+	const interceptionCount = cfg.interception?.rules?.length || 0;
+	const interceptionSummary = interceptionEnabled ? `${interceptionCount} 条` : "关闭";
 
 	return (
 		<div className={cn("reverse-proxy-advanced", compact && "small")}>
@@ -564,6 +881,22 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 				</div>
 				<HeaderRules name={`${name}.headers.request`} label="发往上游的请求头" />
 				<HeaderRules name={`${name}.headers.response`} label="返回客户端的响应头" />
+			</Section>
+			<Section
+				title="响应拦截"
+				summary={interceptionSummary}
+				description="按上游响应状态或 Header 接管返回内容。"
+				open={interceptionEnabled}
+			>
+				<div className="mb-3">
+					<SwitchField
+						name={`${name}.interception.enabled`}
+						id={`${name}-interception-enabled`}
+						label="启用响应拦截"
+						help="匹配到规则后，不再直接透传上游响应。"
+					/>
+				</div>
+				{interceptionEnabled ? <InterceptionRules name={`${name}.interception.rules`} /> : null}
 			</Section>
 			<Section
 				title="上游连接"

@@ -132,6 +132,7 @@ export interface ReverseProxyAdvancedConfig {
 	retry?: ReverseProxyRetryConfig;
 	headers?: ReverseProxyHeadersConfig;
 	transport?: ReverseProxyTransportConfig;
+	interception?: ReverseProxyInterceptionConfig;
 }
 
 export interface ReverseProxyHealthCheckConfig {
@@ -175,6 +176,27 @@ export interface ReverseProxyTransportConfig {
 	responseHeaderTimeout?: string;
 	readTimeout?: string;
 	writeTimeout?: string;
+}
+
+export type ReverseProxyInterceptionAction = "error_page_template" | "redirect" | "respond" | "headers";
+
+export interface ReverseProxyInterceptionConfig {
+	enabled?: boolean;
+	rules?: ReverseProxyInterceptionRule[];
+}
+
+export interface ReverseProxyInterceptionRule {
+	id?: number;
+	statuses?: string[];
+	headerName?: string;
+	headerValue?: string;
+	action?: ReverseProxyInterceptionAction;
+	templateId?: number;
+	redirectUrl?: string;
+	redirectCode?: number;
+	statusCode?: number;
+	body?: string;
+	headers?: ProxyHeaderRule[];
 }
 
 export interface ResponseOptimizationConfig {

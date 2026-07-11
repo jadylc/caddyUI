@@ -237,10 +237,11 @@ type ErrorResponseRule struct {
 }
 
 type ReverseProxyAdvancedConfig struct {
-	HealthCheck ReverseProxyHealthCheckConfig `json:"health_check,omitempty"`
-	Retry       ReverseProxyRetryConfig       `json:"retry,omitempty"`
-	Headers     ReverseProxyHeadersConfig     `json:"headers,omitempty"`
-	Transport   ReverseProxyTransportConfig   `json:"transport,omitempty"`
+	HealthCheck  ReverseProxyHealthCheckConfig  `json:"health_check,omitempty"`
+	Retry        ReverseProxyRetryConfig        `json:"retry,omitempty"`
+	Headers      ReverseProxyHeadersConfig      `json:"headers,omitempty"`
+	Transport    ReverseProxyTransportConfig    `json:"transport,omitempty"`
+	Interception ReverseProxyInterceptionConfig `json:"interception,omitempty"`
 }
 
 type ReverseProxyHealthCheckConfig struct {
@@ -284,6 +285,25 @@ type ReverseProxyTransportConfig struct {
 	ResponseHeaderTimeout string `json:"response_header_timeout,omitempty"`
 	ReadTimeout           string `json:"read_timeout,omitempty"`
 	WriteTimeout          string `json:"write_timeout,omitempty"`
+}
+
+type ReverseProxyInterceptionConfig struct {
+	Enabled bool                           `json:"enabled,omitempty"`
+	Rules   []ReverseProxyInterceptionRule `json:"rules,omitempty"`
+}
+
+type ReverseProxyInterceptionRule struct {
+	ID           int               `json:"id,omitempty"`
+	Statuses     []string          `json:"statuses,omitempty"`
+	HeaderName   string            `json:"header_name,omitempty"`
+	HeaderValue  string            `json:"header_value,omitempty"`
+	Action       string            `json:"action,omitempty"`
+	TemplateID   int               `json:"template_id,omitempty"`
+	RedirectURL  string            `json:"redirect_url,omitempty"`
+	RedirectCode int               `json:"redirect_code,omitempty"`
+	StatusCode   int               `json:"status_code,omitempty"`
+	Body         string            `json:"body,omitempty"`
+	Headers      []ProxyHeaderRule `json:"headers,omitempty"`
 }
 
 type ForwardAuthConfig struct {
@@ -2365,19 +2385,44 @@ func writeErrorResponseRuleBlock(b *strings.Builder, tmpl ErrorResponseTemplate,
 	inner := indent + "    "
 	switch rule.Action {
 	case "redirect":
-		fmt.Fprintf(b, "%sredir %s %d\n", inner, caddyQuote(rule.RedirectURL), rule.RedirectCode)
+		writeErrorResponseRuleAction(b, tmpl, rule, inner, "{err.status_code}")
 	case "reverse_proxy":
-		fmt.Fprintf(b, "%sreverse_proxy %s {\n", inner, rule.Upstream)
-		fmt.Fprintf(b, "%s    replace_status {err.status_code}\n", inner)
-		fmt.Fprintf(b, "%s}\n", inner)
+		writeErrorResponseRuleAction(b, tmpl, rule, inner, "{err.status_code}")
 	case "respond":
-		fmt.Fprintf(b, "%srespond %s\n", inner, caddyQuote(rule.Body))
+		writeErrorResponseRuleAction(b, tmpl, rule, inner, "{err.status_code}")
 	default:
-		fmt.Fprintf(b, "%sroot * %s\n", inner, caddyQuote(tmpl.StaticRoot))
-		fmt.Fprintf(b, "%srewrite * %s\n", inner, caddyQuote(rule.StaticFile))
-		fmt.Fprintf(b, "%sfile_server\n", inner)
+		writeErrorResponseRuleAction(b, tmpl, rule, inner, "{err.status_code}")
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
+}
+
+func writeErrorResponseRuleAction(b *strings.Builder, tmpl ErrorResponseTemplate, rule ErrorResponseRule, indent string, statusPlaceholder string) {
+	switch rule.Action {
+	case "redirect":
+		fmt.Fprintf(b, "%sredir %s %d\n", indent, caddyQuote(rule.RedirectURL), rule.RedirectCode)
+	case "reverse_proxy":
+		fmt.Fprintf(b, "%sreverse_proxy %s {\n", indent, rule.Upstream)
+		if statusPlaceholder != "" {
+			fmt.Fprintf(b, "%s    replace_status %s\n", indent, statusPlaceholder)
+		}
+		fmt.Fprintf(b, "%s}\n", indent)
+	case "respond":
+		if statusPlaceholder != "" {
+			fmt.Fprintf(b, "%srespond %s %s\n", indent, caddyQuote(rule.Body), statusPlaceholder)
+		} else {
+			fmt.Fprintf(b, "%srespond %s\n", indent, caddyQuote(rule.Body))
+		}
+	default:
+		fmt.Fprintf(b, "%sroot * %s\n", indent, caddyQuote(tmpl.StaticRoot))
+		fmt.Fprintf(b, "%srewrite * %s\n", indent, caddyQuote(rule.StaticFile))
+		if statusPlaceholder != "" {
+			fmt.Fprintf(b, "%sfile_server {\n", indent)
+			fmt.Fprintf(b, "%s    status %s\n", indent, statusPlaceholder)
+			fmt.Fprintf(b, "%s}\n", indent)
+		} else {
+			fmt.Fprintf(b, "%sfile_server\n", indent)
+		}
+	}
 }
 
 func errorResponseStatusArgs(statuses []string) string {
@@ -2929,6 +2974,7 @@ func writeUpstreamsReverseProxyBlock(b *strings.Builder, upstreams []ProxyUpstre
 	}
 	writeReverseProxyHeaderDirectives(b, advanced.Headers, forcedHostHeader, indent+"    ")
 	writeReverseProxyTransportBlock(b, targets, advanced.Transport, upstreamInsecureSkipVerify, indent+"    ")
+	writeReverseProxyInterceptionDirectives(b, advanced.Interception, indent+"    ")
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
@@ -3055,6 +3101,7 @@ func normalizeReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig) Reverse
 	cfg.Transport.ResponseHeaderTimeout = strings.TrimSpace(cfg.Transport.ResponseHeaderTimeout)
 	cfg.Transport.ReadTimeout = strings.TrimSpace(cfg.Transport.ReadTimeout)
 	cfg.Transport.WriteTimeout = strings.TrimSpace(cfg.Transport.WriteTimeout)
+	cfg.Interception = normalizeReverseProxyInterceptionConfig(cfg.Interception)
 	return cfg
 }
 
@@ -3086,6 +3133,98 @@ func normalizeProxyHeaderRules(rules []ProxyHeaderRule) []ProxyHeaderRule {
 	return out
 }
 
+func normalizeReverseProxyInterceptionConfig(cfg ReverseProxyInterceptionConfig) ReverseProxyInterceptionConfig {
+	if !cfg.Enabled {
+		return ReverseProxyInterceptionConfig{}
+	}
+	out := ReverseProxyInterceptionConfig{Enabled: true, Rules: make([]ReverseProxyInterceptionRule, 0, len(cfg.Rules))}
+	for idx, rule := range cfg.Rules {
+		out.Rules = append(out.Rules, normalizeReverseProxyInterceptionRule(rule, idx+1))
+	}
+	return out
+}
+
+func normalizeReverseProxyInterceptionRule(rule ReverseProxyInterceptionRule, fallbackID int) ReverseProxyInterceptionRule {
+	rule.ID = fallbackID
+	statuses := make([]string, 0, len(rule.Statuses))
+	seen := map[string]bool{}
+	for _, raw := range rule.Statuses {
+		status := strings.ToLower(strings.TrimSpace(raw))
+		if status == "" || status == "default" {
+			continue
+		}
+		if seen[status] {
+			continue
+		}
+		seen[status] = true
+		statuses = append(statuses, status)
+	}
+	rule.Statuses = statuses
+	rule.HeaderName = strings.TrimSpace(rule.HeaderName)
+	rule.HeaderValue = strings.TrimSpace(rule.HeaderValue)
+	rule.Action = strings.ToLower(strings.TrimSpace(rule.Action))
+	if rule.Action == "" {
+		rule.Action = "error_page_template"
+	}
+	rule.RedirectURL = strings.TrimSpace(rule.RedirectURL)
+	rule.Body = strings.TrimSpace(rule.Body)
+	if rule.RedirectCode == 0 {
+		rule.RedirectCode = http.StatusFound
+	}
+	rule.Headers = normalizeProxyHeaderRules(rule.Headers)
+	return rule
+}
+
+func reverseProxyInterceptionStatusArgs(statuses []string) string {
+	out := []string{}
+	for _, status := range statuses {
+		status = strings.ToLower(strings.TrimSpace(status))
+		if status == "" || status == "default" {
+			continue
+		}
+		out = append(out, status)
+	}
+	return strings.Join(out, " ")
+}
+
+func selectErrorResponseRuleForInterception(rules []ErrorResponseRule, statuses []string) (ErrorResponseRule, bool) {
+	if len(rules) == 0 {
+		return ErrorResponseRule{}, false
+	}
+	for _, status := range statuses {
+		status = strings.ToLower(strings.TrimSpace(status))
+		for _, rule := range rules {
+			if errorResponseRuleMatchesStatus(rule, status) {
+				return rule, true
+			}
+		}
+	}
+	for _, rule := range rules {
+		for _, status := range rule.Statuses {
+			if status == "default" {
+				return rule, true
+			}
+		}
+	}
+	return rules[0], true
+}
+
+func errorResponseRuleMatchesStatus(rule ErrorResponseRule, status string) bool {
+	if status == "" || status == "default" {
+		return false
+	}
+	for _, candidate := range rule.Statuses {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == status {
+			return true
+		}
+		if len(candidate) == 3 && candidate[1:] == "xx" && len(status) == 3 && candidate[0] == status[0] {
+			return true
+		}
+	}
+	return false
+}
+
 func reverseProxyAdvancedNeedsBlock(cfg ReverseProxyAdvancedConfig) bool {
 	hc := cfg.HealthCheck
 	if hc.Enabled && (hc.URI != "" || hc.Interval != "" || hc.Timeout != "" || hc.Status != "") {
@@ -3100,6 +3239,9 @@ func reverseProxyAdvancedNeedsBlock(cfg ReverseProxyAdvancedConfig) bool {
 	}
 	headers := cfg.Headers
 	if headers.HostMode != "" || len(headers.Request) > 0 || len(headers.Response) > 0 {
+		return true
+	}
+	if cfg.Interception.Enabled && len(cfg.Interception.Rules) > 0 {
 		return true
 	}
 	return false
@@ -3222,6 +3364,71 @@ func writeReverseProxyTransportBlock(b *strings.Builder, upstreams []ProxyUpstre
 		fmt.Fprintf(b, "%s    write_timeout %s\n", indent, cfg.WriteTimeout)
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
+}
+
+func writeReverseProxyInterceptionDirectives(b *strings.Builder, cfg ReverseProxyInterceptionConfig, indent string) {
+	cfg = normalizeReverseProxyInterceptionConfig(cfg)
+	if !cfg.Enabled || len(cfg.Rules) == 0 {
+		return
+	}
+	for idx, rule := range cfg.Rules {
+		if len(rule.Statuses) == 0 && rule.HeaderName == "" {
+			continue
+		}
+		matcher := fmt.Sprintf("rp_intercept_%d", idx+1)
+		fmt.Fprintf(b, "%s@%s {\n", indent, matcher)
+		if statusArgs := reverseProxyInterceptionStatusArgs(rule.Statuses); statusArgs != "" {
+			fmt.Fprintf(b, "%s    status %s\n", indent, statusArgs)
+		}
+		if rule.HeaderName != "" {
+			headerValue := rule.HeaderValue
+			if headerValue == "" {
+				headerValue = "*"
+			}
+			fmt.Fprintf(b, "%s    header %s %s\n", indent, rule.HeaderName, caddyQuote(headerValue))
+		}
+		fmt.Fprintf(b, "%s}\n", indent)
+		fmt.Fprintf(b, "%shandle_response @%s {\n", indent, matcher)
+		writeReverseProxyInterceptionAction(b, rule, indent+"    ")
+		fmt.Fprintf(b, "%s}\n", indent)
+	}
+}
+
+func writeReverseProxyInterceptionAction(b *strings.Builder, rule ReverseProxyInterceptionRule, indent string) {
+	switch rule.Action {
+	case "error_page_template":
+		writeReverseProxyInterceptionTemplateAction(b, rule, indent)
+	case "redirect":
+		fmt.Fprintf(b, "%sredir %s %d\n", indent, caddyQuote(rule.RedirectURL), rule.RedirectCode)
+	case "respond":
+		statusCode := rule.StatusCode
+		if statusCode == 0 {
+			statusCode = http.StatusOK
+		}
+		fmt.Fprintf(b, "%srespond %s %d\n", indent, caddyQuote(rule.Body), statusCode)
+	case "headers":
+		writeReverseProxyInterceptionHeaderAction(b, rule.Headers, indent)
+	default:
+		writeReverseProxyInterceptionHeaderAction(b, nil, indent)
+	}
+}
+
+func writeReverseProxyInterceptionTemplateAction(b *strings.Builder, rule ReverseProxyInterceptionRule, indent string) {
+	template, ok, err := errorResponseTemplateByID(rule.TemplateID)
+	if err != nil || !ok || !template.Enabled {
+		return
+	}
+	template = normalizeErrorResponseTemplate(template)
+	if selected, ok := selectErrorResponseRuleForInterception(template.Rules, rule.Statuses); ok {
+		writeErrorResponseRuleAction(b, template, selected, indent, "{rp.status_code}")
+	}
+}
+
+func writeReverseProxyInterceptionHeaderAction(b *strings.Builder, rules []ProxyHeaderRule, indent string) {
+	for _, rule := range rules {
+		writeProxyHeaderRule(b, "header", rule, indent)
+	}
+	fmt.Fprintf(b, "%scopy_response\n", indent)
 }
 
 func upstreamsNeedInsecureSkipVerify(upstreams []ProxyUpstream) bool {
@@ -3885,6 +4092,9 @@ func validateReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig, label st
 	if err := validateProxyHeaderRules(headers.Response, label+" 响应头"); err != nil {
 		return err
 	}
+	if err := validateReverseProxyInterceptionConfig(cfg.Interception, label+" 响应拦截"); err != nil {
+		return err
+	}
 	transport := cfg.Transport
 	if transport.TLSServerName != "" && hasControlChars(transport.TLSServerName) {
 		return fmt.Errorf("%s TLS Server Name 不能包含控制字符", label)
@@ -3903,6 +4113,106 @@ func validateReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig, label st
 		}
 	}
 	return nil
+}
+
+func validateReverseProxyInterceptionConfig(cfg ReverseProxyInterceptionConfig, label string) error {
+	rawRules := cfg.Rules
+	if cfg.Enabled {
+		for idx, rawRule := range rawRules {
+			rule := normalizeReverseProxyInterceptionRule(rawRule, idx+1)
+			if len(rule.Statuses) == 0 && rule.HeaderName == "" {
+				return fmt.Errorf("%s 规则必须配置状态码或 Header 条件", label)
+			}
+		}
+	}
+	cfg = normalizeReverseProxyInterceptionConfig(cfg)
+	if !cfg.Enabled {
+		return nil
+	}
+	if len(rawRules) > 0 && len(cfg.Rules) == 0 {
+		return fmt.Errorf("%s 至少需要一条有效规则", label)
+	}
+	templates, err := loadErrorResponseTemplates()
+	if err != nil {
+		return err
+	}
+	templateIDs := map[int]bool{}
+	for _, tmpl := range templates {
+		if tmpl.Enabled {
+			templateIDs[tmpl.ID] = true
+		}
+	}
+	for _, rule := range cfg.Rules {
+		for _, status := range rule.Statuses {
+			if !validReverseProxyInterceptionStatus(status) {
+				return fmt.Errorf("%s 状态 %s 无效", label, status)
+			}
+		}
+		if rule.HeaderName != "" && !headerNameRe.MatchString(rule.HeaderName) {
+			return fmt.Errorf("%s Header 名称无效: %s", label, rule.HeaderName)
+		}
+		if hasControlChars(rule.HeaderValue) {
+			return fmt.Errorf("%s Header 值不能包含控制字符", label)
+		}
+		switch rule.Action {
+		case "error_page_template":
+			if rule.TemplateID <= 0 {
+				return fmt.Errorf("%s 错误页模板不能为空", label)
+			}
+			if !templateIDs[rule.TemplateID] {
+				return fmt.Errorf("%s 错误页模板不存在或已停用", label)
+			}
+		case "redirect":
+			if rule.RedirectURL == "" {
+				return fmt.Errorf("%s 跳转地址不能为空", label)
+			}
+			if hasControlChars(rule.RedirectURL) {
+				return fmt.Errorf("%s 跳转地址不能包含控制字符", label)
+			}
+			u, err := url.Parse(rule.RedirectURL)
+			if err != nil || u.Scheme == "" || u.Host == "" {
+				return fmt.Errorf("%s 跳转地址必须是完整 URL", label)
+			}
+			if rule.RedirectCode < 300 || rule.RedirectCode > 399 {
+				return fmt.Errorf("%s 跳转状态码必须是 3xx", label)
+			}
+		case "respond":
+			if rule.Body == "" {
+				return fmt.Errorf("%s 固定响应内容不能为空", label)
+			}
+			if hasDisallowedTextControlChars(rule.Body) {
+				return fmt.Errorf("%s 固定响应内容不能包含控制字符", label)
+			}
+			if rule.StatusCode != 0 && (rule.StatusCode < 100 || rule.StatusCode > 599) {
+				return fmt.Errorf("%s 固定响应状态码必须是 100-599", label)
+			}
+		case "headers":
+			if len(rule.Headers) == 0 {
+				return fmt.Errorf("%s 改 Header 动作至少需要一条 Header 规则", label)
+			}
+			if err := validateProxyHeaderRules(rule.Headers, label+" 改 Header"); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%s 动作无效", label)
+		}
+	}
+	return nil
+}
+
+func validReverseProxyInterceptionStatus(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "default" {
+		return true
+	}
+	if len(value) == 3 && value[1:] == "xx" {
+		return value[0] >= '1' && value[0] <= '5'
+	}
+	if len(value) != 3 {
+		return false
+	}
+	code, err := strconv.Atoi(value)
+	return err == nil && code >= 100 && code <= 599
 }
 
 func validateOptionalCaddyDuration(value string, label string) error {

@@ -2136,6 +2136,98 @@ func TestRenderSiteSupportsReverseProxyAdvancedConfig(t *testing.T) {
 	}
 }
 
+func TestRenderSiteSupportsReverseProxyResponseInterception(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+	root := filepath.ToSlash(filepath.Join(errorPagesDir, "intercept"))
+	template := ErrorResponseTemplate{
+		ID:         40401,
+		Name:       "Upstream errors",
+		Enabled:    true,
+		StaticRoot: root,
+		Rules: []ErrorResponseRule{
+			{Statuses: []string{"404"}, Action: "static_file", StaticFile: "/404.html"},
+			{Statuses: []string{"5xx"}, Action: "respond", Body: "Upstream failed"},
+		},
+	}
+	if err := saveJSONFile(errorResponseTemplatePath, []ErrorResponseTemplate{template}); err != nil {
+		t.Fatalf("saveJSONFile template error = %v", err)
+	}
+
+	conf, err := renderSite(Site{
+		Name:    "intercepted-upstream",
+		Domain:  "intercepted.example.com",
+		Backend: "http://127.0.0.1:8080",
+		NoTLS:   true,
+		ReverseProxy: ReverseProxyAdvancedConfig{
+			Interception: ReverseProxyInterceptionConfig{
+				Enabled: true,
+				Rules: []ReverseProxyInterceptionRule{
+					{
+						Statuses:   []string{"404"},
+						Action:     "error_page_template",
+						TemplateID: template.ID,
+					},
+					{
+						Statuses:     []string{"401", "403"},
+						HeaderName:   "X-Auth-State",
+						HeaderValue:  "expired",
+						Action:       "redirect",
+						RedirectURL:  "https://login.example.com",
+						RedirectCode: 302,
+					},
+					{
+						Statuses:   []string{"502"},
+						Action:     "respond",
+						StatusCode: 503,
+						Body:       "Service unavailable",
+					},
+					{
+						HeaderName: "X-Trace",
+						Action:     "headers",
+						Headers: []ProxyHeaderRule{
+							{Action: "set", Name: "X-Handled-By", Value: "caddy"},
+							{Action: "delete", Name: "Server"},
+						},
+					},
+				},
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	for _, want := range []string{
+		"reverse_proxy http://127.0.0.1:8080 {",
+		"@rp_intercept_1 {",
+		"status 404",
+		"handle_response @rp_intercept_1 {",
+		"root * " + caddyQuote(root),
+		`rewrite * "/404.html"`,
+		"file_server {",
+		"status {rp.status_code}",
+		"@rp_intercept_2 {",
+		"status 401 403",
+		`header X-Auth-State "expired"`,
+		`redir "https://login.example.com" 302`,
+		"@rp_intercept_3 {",
+		"status 502",
+		`respond "Service unavailable" 503`,
+		"@rp_intercept_4 {",
+		`header X-Trace "*"`,
+		`header X-Handled-By "caddy"`,
+		"header -Server",
+		"copy_response",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+	if strings.Contains(conf, "copy_response_headers") {
+		t.Fatalf("renderSite = %q, should not duplicate response headers before copy_response", conf)
+	}
+}
+
 func TestRenderSiteSupportsResponseOptimization(t *testing.T) {
 	conf, err := renderSite(Site{
 		Name:    "optimized",
@@ -2435,6 +2527,45 @@ func TestValidateSiteProxyConfigRejectsInvalidReverseProxyAdvancedConfig(t *test
 				Transport: ReverseProxyTransportConfig{Protocol: "http3"},
 			},
 		},
+		{
+			name: "interception rule without condition",
+			cfg: ReverseProxyAdvancedConfig{
+				Interception: ReverseProxyInterceptionConfig{
+					Enabled: true,
+					Rules: []ReverseProxyInterceptionRule{{
+						Action:       "redirect",
+						RedirectURL:  "https://example.com",
+						RedirectCode: 302,
+					}},
+				},
+			},
+		},
+		{
+			name: "interception invalid status",
+			cfg: ReverseProxyAdvancedConfig{
+				Interception: ReverseProxyInterceptionConfig{
+					Enabled: true,
+					Rules: []ReverseProxyInterceptionRule{{
+						Statuses:     []string{"999"},
+						Action:       "redirect",
+						RedirectURL:  "https://example.com",
+						RedirectCode: 302,
+					}},
+				},
+			},
+		},
+		{
+			name: "interception header action without header rules",
+			cfg: ReverseProxyAdvancedConfig{
+				Interception: ReverseProxyInterceptionConfig{
+					Enabled: true,
+					Rules: []ReverseProxyInterceptionRule{{
+						Statuses: []string{"404"},
+						Action:   "headers",
+					}},
+				},
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2464,6 +2595,15 @@ func TestNPMProxyHostRoundTripsReverseProxyAdvancedConfig(t *testing.T) {
 			Headers: ReverseProxyHeadersConfig{
 				HostMode: "upstream",
 			},
+			Interception: ReverseProxyInterceptionConfig{
+				Enabled: true,
+				Rules: []ReverseProxyInterceptionRule{{
+					Statuses:   []string{"404"},
+					HeaderName: "X-Upstream-Error",
+					Action:     "headers",
+					Headers:    []ProxyHeaderRule{{Action: "set", Name: "X-Handled-By", Value: "caddy"}},
+				}},
+			},
 			Transport: ReverseProxyTransportConfig{
 				TLSInsecureSkipVerify: true,
 				TLSServerName:         "app.internal",
@@ -2490,6 +2630,9 @@ func TestNPMProxyHostRoundTripsReverseProxyAdvancedConfig(t *testing.T) {
 	if !site.UpstreamInsecureSkipVerify || !site.ReverseProxy.Transport.TLSInsecureSkipVerify || site.ReverseProxy.Retry.Methods != "get_head" {
 		t.Fatalf("site reverse proxy = %#v, legacy skip verify = %v", site.ReverseProxy, site.UpstreamInsecureSkipVerify)
 	}
+	if len(site.ReverseProxy.Interception.Rules) != 1 || site.ReverseProxy.Interception.Rules[0].HeaderName != "X-Upstream-Error" {
+		t.Fatalf("site response interception = %#v", site.ReverseProxy.Interception)
+	}
 	if len(site.Locations) != 1 || site.Locations[0].ReverseProxyMode != "custom" || site.Locations[0].ReverseProxy.Headers.HostMode != "host" {
 		t.Fatalf("site locations = %#v", site.Locations)
 	}
@@ -2497,6 +2640,9 @@ func TestNPMProxyHostRoundTripsReverseProxyAdvancedConfig(t *testing.T) {
 	out := siteToNPMProxyHost(site, nil)
 	if !out.UpstreamInsecureSkipVerify || !out.ReverseProxy.Transport.TLSInsecureSkipVerify || out.ReverseProxy.Transport.TLSServerName != "app.internal" {
 		t.Fatalf("round-trip reverse proxy = %#v, skip verify = %v", out.ReverseProxy, out.UpstreamInsecureSkipVerify)
+	}
+	if len(out.ReverseProxy.Interception.Rules) != 1 || out.ReverseProxy.Interception.Rules[0].Headers[0].Name != "X-Handled-By" {
+		t.Fatalf("round-trip response interception = %#v", out.ReverseProxy.Interception)
 	}
 	if len(out.Locations) != 1 || out.Locations[0].ReverseProxyMode != "custom" || out.Locations[0].ReverseProxy.Headers.HostMode != "host" {
 		t.Fatalf("round-trip locations = %#v", out.Locations)
@@ -3745,12 +3891,13 @@ func TestRenderSiteWithErrorResponseTemplate(t *testing.T) {
 		"handle_errors 404 {",
 		"root * " + caddyQuote(root),
 		`rewrite * "/404.html"`,
-		"file_server",
+		"file_server {",
+		"status {err.status_code}",
 		"handle_errors 5xx {",
 		"reverse_proxy http://errors.internal:8080 {",
 		"replace_status {err.status_code}",
 		"handle_errors {",
-		`respond "Unexpected error"`,
+		`respond "Unexpected error" {err.status_code}`,
 	} {
 		if !strings.Contains(conf, want) {
 			t.Fatalf("renderSite = %q, want %q", conf, want)
