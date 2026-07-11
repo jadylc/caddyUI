@@ -51,12 +51,15 @@
 | 模块 | 能力 |
 | --- | --- |
 | 站点管理 | 反向代理、重定向、404 站点、TCP/UDP Streams、多监听端口、审计日志 |
+| 响应策略 | Header / CORS / CSP / 缓存 / 安全头策略模板，站点可直接绑定复用 |
+| 错误处理 | 错误响应模板、上游响应拦截、按状态码或 Header 接管后端响应 |
 | 证书管理 | Caddy 自动 HTTPS、HTTP-01、DNS-01、自定义证书、Caddy Internal、自定义 ACME |
 | DNS-01 | 阿里云 DNS、Cloudflare、DNSPod，支持 DNSPod 委派 Zone |
 | 动态 DNS | 基于 Caddy Dynamic DNS 插件生成配置，自动同步域名解析 |
 | 访问控制 | Basic Auth 访问列表、IP allow/deny、Authelia / authentik forward_auth |
 | 通信规则 | 独立管理 TCP/UDP 转发规则，并关联到代理服务 |
 | 域名监控 | DNS、SSL 证书到期、签发机构、域名注册到期、非 443 SSL 目标 |
+| 运行观测 | 请求量、状态码、P95 延迟、上游健康、最近错误和访问日志 |
 | 域名续期 | DNSHE 手动续期和自动续期，DigitalPlat 到期提醒 |
 | 推送通知 | Webhook、Bark、Server酱、Gotify、Telegram、企业微信、钉钉、飞书 |
 | 网络唤醒 | 保存唤醒设备，一键发送 Wake-on-LAN 魔术包 |
@@ -159,6 +162,22 @@ ports:
 - 反向代理支持多个监听端口，例如 `443,11111`。
 - 列表页会展示实际监听端口，域名链接会根据 HTTPS 状态和端口生成。
 - Cloudflare Origin Rule、内网 DNS 直连等场景，需要让请求最终到达同一个反代监听端口。
+- 「反代高级」支持重试、主动/被动健康检查、请求/响应头改写、上游连接超时和上游响应拦截。
+
+### 响应策略与错误处理
+
+- 「策略模板」集中管理可复用响应头策略，适合 CORS、CSP、缓存策略和安全响应头。
+- 内置预设包含 API 安全默认、静态站默认、下载站、禁止 iframe、宽松 CORS。
+- 代理站和静态站可在「响应优化」中绑定策略模板，并可继续开启压缩、Cache-Control 和安全响应头。
+- 站点级 Cache-Control / 安全响应头会覆盖模板里的同名 Header，便于在通用模板基础上做局部调整。
+- 「错误响应模板」用于统一处理 Caddy 错误页，可按状态码输出静态文件、固定响应、重定向或反代到错误页服务。
+- 「上游响应拦截」用于处理后端返回的 401/403/404/502 等响应，可按上游状态码或 Header 匹配，并执行错误页模板、重定向、固定响应或改 Header。
+
+### 运行观测
+
+- 「运行观测」面板展示请求量、2xx/3xx/4xx/5xx、P95 延迟、上游健康和最近错误趋势。
+- 支持从站点详情查看运行态指标和最近错误，配合访问日志定位异常。
+- 指标来自 Caddy 运行态和访问日志，不依赖前端静态假数据。
 
 ### 证书与 ACME
 
@@ -279,9 +298,12 @@ example.com:8443
 | `/config/sites/*.json` | UI 站点元数据 |
 | `/config/credentials.json` | DNS、DigitalPlat、DNSHE 等可复用凭据 |
 | `/config/issuer-credentials.json` | ACME 签发机构凭据 |
+| `/config/header-policy-templates.json` | Header / CORS / CSP / 缓存策略模板 |
+| `/config/error-response-templates.json` | 错误响应模板 |
 | `/config/domain-monitor.json` | 域名监控配置和检查结果 |
 | `/config/notification-channels.json` | 推送渠道配置 |
 | `/config/wake-devices.json` | 网络唤醒设备配置 |
+| `/config/access-logs/*.log` | 站点访问日志 |
 | `/config/caddy/caddy.log` | Caddy 和后端 API 日志 |
 
 ## 环境变量
@@ -334,6 +356,7 @@ go test ./...
 ```bash
 cd ui
 npm ci
+npm run lint
 npm run build
 ```
 
