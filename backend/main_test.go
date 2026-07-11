@@ -28,6 +28,7 @@ func withTempPaths(t *testing.T, dir string) {
 	oldIssuerCredentialPath := issuerCredentialPath
 	oldDomainMonitorPath := domainMonitorPath
 	oldErrorResponseTemplatePath := errorResponseTemplatePath
+	oldHeaderPolicyTemplatePath := headerPolicyTemplatePath
 	oldWakeDevicePath := wakeDevicePath
 	oldNotificationChannelPath := notificationChannelPath
 	oldNotificationStatePath := notificationStatePath
@@ -39,6 +40,7 @@ func withTempPaths(t *testing.T, dir string) {
 	issuerCredentialPath = filepath.Join(dir, "issuer-credentials.json")
 	domainMonitorPath = filepath.Join(dir, "domain-monitor.json")
 	errorResponseTemplatePath = filepath.Join(dir, "error-response-templates.json")
+	headerPolicyTemplatePath = filepath.Join(dir, "header-policy-templates.json")
 	wakeDevicePath = filepath.Join(dir, "wake-devices.json")
 	notificationChannelPath = filepath.Join(dir, "notification-channels.json")
 	notificationStatePath = filepath.Join(dir, "notification-state.json")
@@ -51,6 +53,7 @@ func withTempPaths(t *testing.T, dir string) {
 		issuerCredentialPath = oldIssuerCredentialPath
 		domainMonitorPath = oldDomainMonitorPath
 		errorResponseTemplatePath = oldErrorResponseTemplatePath
+		headerPolicyTemplatePath = oldHeaderPolicyTemplatePath
 		wakeDevicePath = oldWakeDevicePath
 		notificationChannelPath = oldNotificationChannelPath
 		notificationStatePath = oldNotificationStatePath
@@ -82,6 +85,7 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 	oldAuditLogPath := auditLogPath
 	oldAccessLogDir := accessLogDir
 	oldErrorResponseTemplatePath := errorResponseTemplatePath
+	oldHeaderPolicyTemplatePath := headerPolicyTemplatePath
 	oldErrorPagesDir := errorPagesDir
 	sitesDir = filepath.Join(dir, "sites")
 	accessLogDir = filepath.Join(dir, "access-logs")
@@ -95,6 +99,7 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 	caddyCertsDir = filepath.Join(dir, "certs")
 	auditLogPath = filepath.Join(dir, "audit-log.json")
 	errorResponseTemplatePath = filepath.Join(dir, "error-response-templates.json")
+	headerPolicyTemplatePath = filepath.Join(dir, "header-policy-templates.json")
 	if err := os.MkdirAll(sitesDir, 0755); err != nil {
 		t.Fatalf("MkdirAll sitesDir error = %v", err)
 	}
@@ -120,6 +125,7 @@ func withTempRuntimePaths(t *testing.T, dir string) {
 		auditLogPath = oldAuditLogPath
 		accessLogDir = oldAccessLogDir
 		errorResponseTemplatePath = oldErrorResponseTemplatePath
+		headerPolicyTemplatePath = oldHeaderPolicyTemplatePath
 		errorPagesDir = oldErrorPagesDir
 	})
 }
@@ -2229,6 +2235,22 @@ func TestRenderSiteSupportsReverseProxyResponseInterception(t *testing.T) {
 }
 
 func TestRenderSiteSupportsResponseOptimization(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+	template := HeaderPolicyTemplate{
+		ID:       701,
+		Name:     "Static policy",
+		Enabled:  true,
+		Category: "static",
+		Headers: []ProxyHeaderRule{
+			{Action: "set", Name: "Cache-Control", Value: "public, max-age=3600"},
+			{Action: "set", Name: "Content-Security-Policy", Value: "default-src 'self'"},
+			{Action: "delete", Name: "Server"},
+		},
+	}
+	if err := saveUserHeaderPolicyTemplates([]HeaderPolicyTemplate{template}); err != nil {
+		t.Fatalf("saveUserHeaderPolicyTemplates error = %v", err)
+	}
 	conf, err := renderSite(Site{
 		Name:    "optimized",
 		Domain:  "optimized.example.com",
@@ -2239,6 +2261,7 @@ func TestRenderSiteSupportsResponseOptimization(t *testing.T) {
 			CacheControlEnabled:    true,
 			CacheControlValue:      "public, max-age=300",
 			SecurityHeadersEnabled: true,
+			PolicyTemplateID:       template.ID,
 		},
 	}, nil)
 	if err != nil {
@@ -2248,6 +2271,8 @@ func TestRenderSiteSupportsResponseOptimization(t *testing.T) {
 		"encode gzip zstd",
 		"header {",
 		`Cache-Control "public, max-age=300"`,
+		`Content-Security-Policy "default-src 'self'"`,
+		"-Server",
 		`X-Content-Type-Options "nosniff"`,
 		`Referrer-Policy "strict-origin-when-cross-origin"`,
 		`X-Frame-Options "SAMEORIGIN"`,
@@ -4000,6 +4025,79 @@ func TestErrorResponseTemplateDeleteBlocksReferencedTemplate(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ID != template.ID {
 		t.Fatalf("templates = %#v, want original template retained", items)
+	}
+}
+
+func TestHeaderPolicyTemplateDeleteBlocksReferencedTemplate(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+	template := HeaderPolicyTemplate{
+		ID:      801,
+		Name:    "Shared policy",
+		Enabled: true,
+		Headers: []ProxyHeaderRule{{Action: "set", Name: "X-Content-Type-Options", Value: "nosniff"}},
+	}
+	if err := saveUserHeaderPolicyTemplates([]HeaderPolicyTemplate{template}); err != nil {
+		t.Fatalf("saveUserHeaderPolicyTemplates error = %v", err)
+	}
+	site := Site{
+		Name:    "app",
+		Domain:  "app.example.com",
+		Backend: "http://127.0.0.1:9000",
+		Response: ResponseOptimizationConfig{
+			PolicyTemplateID: template.ID,
+		},
+	}
+	if err := saveJSONFile(filepath.Join(sitesDir, site.Name+metaSuffix), site); err != nil {
+		t.Fatalf("saveJSONFile site error = %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/caddy/header-policy-templates/801", nil)
+	headerPolicyTemplateItemHandler(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s, want 400", rr.Code, rr.Body.String())
+	}
+	items, err := loadUserHeaderPolicyTemplates()
+	if err != nil {
+		t.Fatalf("loadUserHeaderPolicyTemplates error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != template.ID {
+		t.Fatalf("templates = %#v, want original template retained", items)
+	}
+}
+
+func TestHeaderPolicyTemplatesExposeBuiltinReadOnlyTemplates(t *testing.T) {
+	tmp := t.TempDir()
+	withTempRuntimePaths(t, tmp)
+
+	rr := httptest.NewRecorder()
+	headerPolicyTemplatesHandler(rr, httptest.NewRequest(http.MethodGet, "/caddy/header-policy-templates", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rr.Code, rr.Body.String())
+	}
+	var items []HeaderPolicyTemplate
+	if err := json.Unmarshal(rr.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal templates error = %v", err)
+	}
+	if len(items) < len(builtinHeaderPolicyTemplates) {
+		t.Fatalf("templates = %#v, want built-in templates", items)
+	}
+	foundLooseCORS := false
+	for _, item := range items {
+		if item.Name == "宽松 CORS" && item.Builtin && item.Enabled {
+			foundLooseCORS = true
+		}
+	}
+	if !foundLooseCORS {
+		t.Fatalf("templates = %#v, want enabled built-in loose CORS template", items)
+	}
+
+	rr = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/caddy/header-policy-templates/-105", nil)
+	headerPolicyTemplateItemHandler(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s, want 400", rr.Code, rr.Body.String())
 	}
 }
 

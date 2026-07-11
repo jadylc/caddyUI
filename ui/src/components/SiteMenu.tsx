@@ -126,6 +126,10 @@ const menuItems: MenuItem[] = [
 				to: "/caddy/error-response-templates",
 				label: "error-response-templates",
 			},
+			{
+				to: "/caddy/header-policy-templates",
+				label: "header-policy-templates",
+			},
 		],
 	},
 	{

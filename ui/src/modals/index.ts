@@ -8,6 +8,7 @@ export * from "./DynamicDNSModal";
 export * from "./ErrorResponseTemplateModal";
 export * from "./EventDetailsModal";
 export * from "./HelpModal";
+export * from "./HeaderPolicyTemplateModal";
 export * from "./HTTPCertificateModal";
 export * from "./NotificationChannelModal";
 export * from "./ProxyHostModal";

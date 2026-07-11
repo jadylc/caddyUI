@@ -204,6 +204,23 @@ export interface ResponseOptimizationConfig {
 	cacheControlEnabled?: boolean;
 	cacheControlValue?: string;
 	securityHeadersEnabled?: boolean;
+	policyTemplateId?: number;
+}
+
+export interface HeaderPolicyTemplate {
+	id: number;
+	createdOn?: string;
+	modifiedOn?: string;
+	ownerUserId?: number;
+	name: string;
+	description?: string;
+	category?: string;
+	enabled: boolean;
+	builtin?: boolean;
+	headers?: ProxyHeaderRule[];
+	meta?: Record<string, any>;
+	hostCount?: number;
+	owner?: User;
 }
 
 export interface AccessLogConfig {

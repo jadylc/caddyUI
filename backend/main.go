@@ -52,6 +52,7 @@ var (
 	dynamicDNSPath            = "/config/dynamic-dns.json"
 	domainMonitorPath         = "/config/domain-monitor.json"
 	errorResponseTemplatePath = "/config/error-response-templates.json"
+	headerPolicyTemplatePath  = "/config/header-policy-templates.json"
 	notificationChannelPath   = "/config/notification-channels.json"
 	notificationStatePath     = "/config/notification-state.json"
 	settingsPath              = "/config/settings.json"
@@ -194,6 +195,7 @@ type ResponseOptimizationConfig struct {
 	CacheControlEnabled    bool   `json:"cache_control_enabled,omitempty"`
 	CacheControlValue      string `json:"cache_control_value,omitempty"`
 	SecurityHeadersEnabled bool   `json:"security_headers_enabled,omitempty"`
+	PolicyTemplateID       int    `json:"policy_template_id,omitempty"`
 }
 
 type AccessLogConfig struct {
@@ -223,6 +225,22 @@ type ErrorResponseTemplate struct {
 	Meta        map[string]any      `json:"meta,omitempty"`
 	HostCount   int                 `json:"host_count,omitempty"`
 	Owner       npmUser             `json:"owner,omitempty"`
+}
+
+type HeaderPolicyTemplate struct {
+	ID          int               `json:"id"`
+	CreatedOn   string            `json:"created_on,omitempty"`
+	ModifiedOn  string            `json:"modified_on,omitempty"`
+	OwnerUserID int               `json:"owner_user_id,omitempty"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Category    string            `json:"category,omitempty"`
+	Enabled     bool              `json:"enabled"`
+	Builtin     bool              `json:"builtin,omitempty"`
+	Headers     []ProxyHeaderRule `json:"headers,omitempty"`
+	Meta        map[string]any    `json:"meta,omitempty"`
+	HostCount   int               `json:"host_count,omitempty"`
+	Owner       npmUser           `json:"owner,omitempty"`
 }
 
 type ErrorResponseRule struct {
@@ -507,6 +525,8 @@ func main() {
 	mux.HandleFunc("/caddy/domain-monitor/", npmDomainMonitorItemHandler)
 	mux.HandleFunc("/caddy/error-response-templates", errorResponseTemplatesHandler)
 	mux.HandleFunc("/caddy/error-response-templates/", errorResponseTemplateItemHandler)
+	mux.HandleFunc("/caddy/header-policy-templates", headerPolicyTemplatesHandler)
+	mux.HandleFunc("/caddy/header-policy-templates/", headerPolicyTemplateItemHandler)
 	mux.HandleFunc("/caddy/observability", observabilityHandler)
 	mux.HandleFunc("/caddy/notifications/channels", notificationChannelsHandler)
 	mux.HandleFunc("/caddy/notifications/channels/", notificationChannelItemHandler)
@@ -540,6 +560,8 @@ func main() {
 	mux.HandleFunc("/nginx/domain-monitor/", npmDomainMonitorItemHandler)
 	mux.HandleFunc("/nginx/error-response-templates", errorResponseTemplatesHandler)
 	mux.HandleFunc("/nginx/error-response-templates/", errorResponseTemplateItemHandler)
+	mux.HandleFunc("/nginx/header-policy-templates", headerPolicyTemplatesHandler)
+	mux.HandleFunc("/nginx/header-policy-templates/", headerPolicyTemplateItemHandler)
 	mux.HandleFunc("/nginx/observability", observabilityHandler)
 	mux.HandleFunc("/nginx/notifications/channels", notificationChannelsHandler)
 	mux.HandleFunc("/nginx/notifications/channels/", notificationChannelItemHandler)
@@ -2211,6 +2233,79 @@ var commonSecurityResponseHeaders = []struct {
 	{Name: "Permissions-Policy", Value: "geolocation=(), microphone=(), camera=()"},
 }
 
+var builtinHeaderPolicyTemplates = []HeaderPolicyTemplate{
+	{
+		ID:          -101,
+		Name:        "API 安全默认",
+		Description: "适合 JSON API：禁止缓存、禁止 iframe、收紧 MIME 和来源策略。",
+		Category:    "api",
+		Enabled:     true,
+		Builtin:     true,
+		Headers: []ProxyHeaderRule{
+			{Action: "set", Name: "Cache-Control", Value: "no-store"},
+			{Action: "set", Name: "X-Content-Type-Options", Value: "nosniff"},
+			{Action: "set", Name: "Referrer-Policy", Value: "no-referrer"},
+			{Action: "set", Name: "X-Frame-Options", Value: "DENY"},
+			{Action: "set", Name: "Content-Security-Policy", Value: "default-src 'none'; frame-ancestors 'none'"},
+		},
+	},
+	{
+		ID:          -102,
+		Name:        "静态站默认",
+		Description: "适合普通静态站：开启短缓存、基础安全头和保守 CSP。",
+		Category:    "static",
+		Enabled:     true,
+		Builtin:     true,
+		Headers: []ProxyHeaderRule{
+			{Action: "set", Name: "Cache-Control", Value: "public, max-age=3600"},
+			{Action: "set", Name: "X-Content-Type-Options", Value: "nosniff"},
+			{Action: "set", Name: "Referrer-Policy", Value: "strict-origin-when-cross-origin"},
+			{Action: "set", Name: "Content-Security-Policy", Value: "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'self'"},
+		},
+	},
+	{
+		ID:          -103,
+		Name:        "下载站",
+		Description: "适合文件下载：避免缓存敏感文件，降低浏览器嗅探和内嵌风险。",
+		Category:    "download",
+		Enabled:     true,
+		Builtin:     true,
+		Headers: []ProxyHeaderRule{
+			{Action: "set", Name: "Cache-Control", Value: "no-store"},
+			{Action: "set", Name: "X-Content-Type-Options", Value: "nosniff"},
+			{Action: "set", Name: "X-Download-Options", Value: "noopen"},
+			{Action: "set", Name: "Content-Security-Policy", Value: "sandbox"},
+		},
+	},
+	{
+		ID:          -104,
+		Name:        "禁止 iframe",
+		Description: "禁止被任何页面以 iframe/frame/embed 方式嵌入。",
+		Category:    "security",
+		Enabled:     true,
+		Builtin:     true,
+		Headers: []ProxyHeaderRule{
+			{Action: "set", Name: "X-Frame-Options", Value: "DENY"},
+			{Action: "set", Name: "Content-Security-Policy", Value: "frame-ancestors 'none'"},
+		},
+	},
+	{
+		ID:          -105,
+		Name:        "宽松 CORS",
+		Description: "允许跨域读取，适合公开 API 或公开资源。",
+		Category:    "cors",
+		Enabled:     true,
+		Builtin:     true,
+		Headers: []ProxyHeaderRule{
+			{Action: "set", Name: "Access-Control-Allow-Origin", Value: "*"},
+			{Action: "set", Name: "Access-Control-Allow-Methods", Value: "GET, POST, PUT, PATCH, DELETE, OPTIONS"},
+			{Action: "set", Name: "Access-Control-Allow-Headers", Value: "*"},
+			{Action: "set", Name: "Access-Control-Max-Age", Value: "86400"},
+			{Action: "set", Name: "Vary", Value: "Origin"},
+		},
+	},
+}
+
 type namedSite struct {
 	BaseName string
 	Site     Site
@@ -2301,7 +2396,9 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 	closeHostScope()
 
 	if siteSupportsResponseOptimization(s) {
-		writeResponseOptimizationDirectives(&b, s.Response, blockInner)
+		if err := writeResponseOptimizationDirectives(&b, s.Response, blockInner); err != nil {
+			return "", err
+		}
 		writeAccessLogDirective(&b, s, blockInner)
 	}
 	if siteSupportsErrorHandling(s) {
@@ -2375,6 +2472,19 @@ func errorResponseTemplateByID(id int) (ErrorResponseTemplate, bool, error) {
 	return ErrorResponseTemplate{}, false, nil
 }
 
+func headerPolicyTemplateByID(id int) (HeaderPolicyTemplate, bool, error) {
+	items, err := loadHeaderPolicyTemplates()
+	if err != nil {
+		return HeaderPolicyTemplate{}, false, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, true, nil
+		}
+	}
+	return HeaderPolicyTemplate{}, false, nil
+}
+
 func writeErrorResponseRuleBlock(b *strings.Builder, tmpl ErrorResponseTemplate, rule ErrorResponseRule, indent string) {
 	statusArgs := errorResponseStatusArgs(rule.Statuses)
 	if statusArgs == "" {
@@ -2437,34 +2547,44 @@ func errorResponseStatusArgs(statuses []string) string {
 	return strings.Join(out, " ")
 }
 
-func writeResponseOptimizationDirectives(b *strings.Builder, cfg ResponseOptimizationConfig, indent string) {
+func writeResponseOptimizationDirectives(b *strings.Builder, cfg ResponseOptimizationConfig, indent string) error {
 	cfg = normalizeResponseOptimizationConfig(cfg)
 	if cfg.CompressionEnabled {
 		fmt.Fprintf(b, "%sencode gzip zstd\n", indent)
 	}
 
-	headers := []struct {
-		Name  string
-		Value string
-	}{}
+	headers := []ProxyHeaderRule{}
+	if cfg.PolicyTemplateID != 0 {
+		template, ok, err := headerPolicyTemplateByID(cfg.PolicyTemplateID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("策略模板不存在: %d", cfg.PolicyTemplateID)
+		}
+		if template.Enabled {
+			headers = append(headers, normalizeProxyHeaderRules(template.Headers)...)
+		}
+	}
 	if cfg.CacheControlEnabled {
-		headers = append(headers, struct {
-			Name  string
-			Value string
-		}{Name: "Cache-Control", Value: cfg.CacheControlValue})
+		headers = append(headers, ProxyHeaderRule{Action: "set", Name: "Cache-Control", Value: cfg.CacheControlValue})
 	}
 	if cfg.SecurityHeadersEnabled {
-		headers = append(headers, commonSecurityResponseHeaders...)
+		for _, header := range commonSecurityResponseHeaders {
+			headers = append(headers, ProxyHeaderRule{Action: "set", Name: header.Name, Value: header.Value})
+		}
 	}
+	headers = mergeProxyHeaderRules(headers)
 	if len(headers) == 0 {
-		return
+		return nil
 	}
 
 	fmt.Fprintf(b, "%sheader {\n", indent)
 	for _, header := range headers {
-		fmt.Fprintf(b, "%s    %s %s\n", indent, header.Name, caddyQuote(header.Value))
+		writeProxyHeaderRule(b, "", header, indent+"    ")
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
+	return nil
 }
 
 func writeAccessLogDirective(b *strings.Builder, s Site, indent string) {
@@ -3327,11 +3447,38 @@ func writeReverseProxyHeaderDirectives(b *strings.Builder, cfg ReverseProxyHeade
 }
 
 func writeProxyHeaderRule(b *strings.Builder, directive string, rule ProxyHeaderRule, indent string) {
+	if directive == "" {
+		if rule.Action == "delete" {
+			fmt.Fprintf(b, "%s-%s\n", indent, rule.Name)
+			return
+		}
+		fmt.Fprintf(b, "%s%s %s\n", indent, rule.Name, caddyQuote(rule.Value))
+		return
+	}
 	if rule.Action == "delete" {
 		fmt.Fprintf(b, "%s%s -%s\n", indent, directive, rule.Name)
 		return
 	}
 	fmt.Fprintf(b, "%s%s %s %s\n", indent, directive, rule.Name, caddyQuote(rule.Value))
+}
+
+func mergeProxyHeaderRules(rules []ProxyHeaderRule) []ProxyHeaderRule {
+	out := []ProxyHeaderRule{}
+	indexByName := map[string]int{}
+	for _, rule := range normalizeProxyHeaderRules(rules) {
+		name := strings.TrimSpace(rule.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if idx, ok := indexByName[key]; ok {
+			out[idx] = rule
+			continue
+		}
+		indexByName[key] = len(out)
+		out = append(out, rule)
+	}
+	return out
 }
 
 func writeReverseProxyTransportBlock(b *strings.Builder, upstreams []ProxyUpstream, cfg ReverseProxyTransportConfig, legacyInsecureSkipVerify bool, indent string) {
@@ -3662,6 +3809,10 @@ func normalizeResponseOptimizationConfig(cfg ResponseOptimizationConfig) Respons
 	if !cfg.CacheControlEnabled {
 		cfg.CacheControlValue = ""
 	}
+	if cfg.PolicyTemplateID < 0 {
+		// Built-in templates intentionally use stable negative IDs.
+		return cfg
+	}
 	return cfg
 }
 
@@ -3673,6 +3824,18 @@ func validateResponseOptimizationConfig(cfg ResponseOptimizationConfig, label st
 	}
 	if value != "" && hasControlChars(value) {
 		return fmt.Errorf("%s Cache-Control 不能包含控制字符", label)
+	}
+	if normalized.PolicyTemplateID != 0 {
+		template, ok, err := headerPolicyTemplateByID(normalized.PolicyTemplateID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%s 策略模板不存在", label)
+		}
+		if !template.Enabled {
+			return fmt.Errorf("%s 策略模板已停用", label)
+		}
 	}
 	return nil
 }
@@ -7143,6 +7306,173 @@ func errorResponseTemplateItemHandler(w http.ResponseWriter, r *http.Request) {
 	}, renderSitesAndReload, validateErrorResponseTemplate)
 }
 
+func headerPolicyTemplatesHandler(w http.ResponseWriter, r *http.Request) {
+	items, err := loadHeaderPolicyTemplates()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].Builtin != items[j].Builtin {
+				return items[i].Builtin
+			}
+			if items[i].Category != items[j].Category {
+				return items[i].Category < items[j].Category
+			}
+			return items[i].Name < items[j].Name
+		})
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost:
+		var item HeaderPolicyTemplate
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		item.ID = stableID(fmt.Sprintf("header-policy-template:%s:%d", item.Name, time.Now().UnixNano()))
+		item.Enabled = true
+		item.Builtin = false
+		stampHeaderPolicyTemplate(&item, "", true)
+		if err := validateHeaderPolicyTemplate(item); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		userItems, err := loadUserHeaderPolicyTemplates()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		userItems = append(userItems, item)
+		if err := saveUserHeaderPolicyTemplates(userItems); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := renderSitesAndReload(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		appendAuditLog("header-policy-template", item.ID, "created", auditMetaForJSONItem(item))
+		writeJSON(w, http.StatusCreated, item)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func headerPolicyTemplateItemHandler(w http.ResponseWriter, r *http.Request) {
+	prefix := trimAnyPrefix(r.URL.Path, "/caddy/header-policy-templates/", "/nginx/header-policy-templates/")
+	id, action, ok := parseNPMItemPath(w, r, prefix)
+	if !ok {
+		return
+	}
+	if id < 0 {
+		if r.Method == http.MethodGet && action == "" {
+			if item, ok, err := headerPolicyTemplateByID(id); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			} else if ok {
+				writeJSON(w, http.StatusOK, item)
+			} else {
+				http.Error(w, "item not found", http.StatusNotFound)
+			}
+			return
+		}
+		http.Error(w, "内置策略模板不能修改", http.StatusBadRequest)
+		return
+	}
+	userItems, err := loadUserHeaderPolicyTemplates()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	idx := -1
+	for i := range userItems {
+		if userItems[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		http.Error(w, "item not found", http.StatusNotFound)
+		return
+	}
+	if action != "" && r.Method == http.MethodPost {
+		if action != "enable" && action != "disable" {
+			http.NotFound(w, r)
+			return
+		}
+		userItems[idx].Enabled = action == "enable"
+		if userItems[idx].Enabled {
+			if err := validateHeaderPolicyTemplate(userItems[idx]); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if err := saveUserHeaderPolicyTemplates(userItems); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := renderSitesAndReload(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		appendAuditLog("header-policy-template", id, action+"d", auditMetaForJSONItem(userItems[idx]))
+		writeJSON(w, http.StatusOK, true)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, userItems[idx])
+	case http.MethodPut:
+		next := userItems[idx]
+		if err := json.NewDecoder(r.Body).Decode(&next); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		next.ID = id
+		next.Builtin = false
+		stampHeaderPolicyTemplate(&next, "", true)
+		if err := validateHeaderPolicyTemplate(next); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		userItems[idx] = next
+		if err := saveUserHeaderPolicyTemplates(userItems); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := renderSitesAndReload(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		appendAuditLog("header-policy-template", id, "updated", auditMetaForJSONItem(next))
+		writeJSON(w, http.StatusOK, next)
+	case http.MethodDelete:
+		count, err := headerPolicyTemplateReferenceCount(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if count > 0 {
+			http.Error(w, fmt.Sprintf("策略模板仍被 %d 个站点引用，不能删除", count), http.StatusBadRequest)
+			return
+		}
+		deleted := userItems[idx]
+		userItems = append(userItems[:idx], userItems[idx+1:]...)
+		if err := saveUserHeaderPolicyTemplates(userItems); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := renderSitesAndReload(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		appendAuditLog("header-policy-template", id, "deleted", auditMetaForJSONItem(deleted))
+		writeJSON(w, http.StatusOK, true)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func npmStreamsHandler(w http.ResponseWriter, r *http.Request) {
 	items, err := loadNPMStreams()
 	if err != nil {
@@ -9903,6 +10233,115 @@ func errorResponseTemplateReferenceCount(id int) (int, error) {
 	return count, nil
 }
 
+func loadUserHeaderPolicyTemplates() ([]HeaderPolicyTemplate, error) {
+	items := []HeaderPolicyTemplate{}
+	if err := loadJSONFile(headerPolicyTemplatePath, &items); err != nil {
+		return nil, err
+	}
+	fallback := timestampFromFile(headerPolicyTemplatePath)
+	for i := range items {
+		items[i].Builtin = false
+		stampHeaderPolicyTemplate(&items[i], fallback, false)
+		items[i] = normalizeHeaderPolicyTemplate(items[i])
+	}
+	return items, nil
+}
+
+func loadHeaderPolicyTemplates() ([]HeaderPolicyTemplate, error) {
+	userItems, err := loadUserHeaderPolicyTemplates()
+	if err != nil {
+		return nil, err
+	}
+	counts := headerPolicyTemplateReferenceCounts()
+	items := make([]HeaderPolicyTemplate, 0, len(builtinHeaderPolicyTemplates)+len(userItems))
+	for _, item := range builtinHeaderPolicyTemplates {
+		item = normalizeHeaderPolicyTemplate(item)
+		item.Builtin = true
+		item.Enabled = true
+		item.HostCount = counts[item.ID]
+		items = append(items, item)
+	}
+	for _, item := range userItems {
+		item.HostCount = counts[item.ID]
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func saveUserHeaderPolicyTemplates(items []HeaderPolicyTemplate) error {
+	out := make([]HeaderPolicyTemplate, 0, len(items))
+	for _, item := range items {
+		if item.Builtin {
+			continue
+		}
+		out = append(out, normalizeHeaderPolicyTemplate(item))
+	}
+	return saveJSONFile(headerPolicyTemplatePath, out)
+}
+
+func headerPolicyTemplateReferenceCounts() map[int]int {
+	counts := map[int]int{}
+	sites, err := readAllSites()
+	if err != nil {
+		return counts
+	}
+	for _, site := range sites {
+		if !siteSupportsResponseOptimization(site) {
+			continue
+		}
+		id := normalizeResponseOptimizationConfig(site.Response).PolicyTemplateID
+		if id != 0 {
+			counts[id]++
+		}
+	}
+	return counts
+}
+
+func headerPolicyTemplateReferenceCount(id int) (int, error) {
+	sites, err := readAllSites()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, site := range sites {
+		if !siteSupportsResponseOptimization(site) {
+			continue
+		}
+		if normalizeResponseOptimizationConfig(site.Response).PolicyTemplateID == id {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func validateHeaderPolicyTemplate(item HeaderPolicyTemplate) error {
+	item = normalizeHeaderPolicyTemplate(item)
+	if item.Name == "" {
+		return errors.New("策略模板名称不能为空")
+	}
+	if hasControlChars(item.Name) || hasControlChars(item.Description) || hasControlChars(item.Category) {
+		return errors.New("策略模板名称、描述和分类不能包含控制字符")
+	}
+	if len(item.Headers) == 0 {
+		return errors.New("策略模板至少需要一条 Header 规则")
+	}
+	if err := validateProxyHeaderRules(item.Headers, "策略模板 Header"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeHeaderPolicyTemplate(item HeaderPolicyTemplate) HeaderPolicyTemplate {
+	item.Name = strings.TrimSpace(item.Name)
+	item.Description = strings.TrimSpace(item.Description)
+	item.Category = strings.ToLower(strings.TrimSpace(item.Category))
+	item.Headers = normalizeProxyHeaderRules(item.Headers)
+	if item.Meta == nil {
+		item.Meta = map[string]any{}
+	}
+	return item
+}
+
 func accessListByID(id int) (npmAccessList, bool) {
 	items, err := loadNPMAccessLists()
 	if err != nil {
@@ -11915,16 +12354,33 @@ func stampErrorResponseTemplate(item *ErrorResponseTemplate, fallback string, to
 	item.Owner = localNPMUser
 }
 
+func stampHeaderPolicyTemplate(item *HeaderPolicyTemplate, fallback string, touchModified bool) {
+	stampCreatedModified(&item.CreatedOn, &item.ModifiedOn, fallback, touchModified)
+	item.OwnerUserID = 1
+	item.Name = strings.TrimSpace(item.Name)
+	item.Description = strings.TrimSpace(item.Description)
+	item.Category = strings.ToLower(strings.TrimSpace(item.Category))
+	item.Headers = normalizeProxyHeaderRules(item.Headers)
+	if item.Headers == nil {
+		item.Headers = []ProxyHeaderRule{}
+	}
+	if item.Meta == nil {
+		item.Meta = map[string]any{}
+	}
+	item.Owner = localNPMUser
+}
+
 func siteAuditMeta(s Site) map[string]any {
 	return map[string]any{
-		"name":            s.Name,
-		"domainNames":     splitDomains(s.Domain),
-		"kind":            defaultString(s.Kind, "proxy"),
-		"backend":         s.Backend,
-		"root_path":       s.RootPath,
-		"redirect_url":    s.RedirectURL,
-		"accessListID":    s.AccessListID,
-		"errorTemplateID": s.ErrorHandling.TemplateID,
+		"name":             s.Name,
+		"domainNames":      splitDomains(s.Domain),
+		"kind":             defaultString(s.Kind, "proxy"),
+		"backend":          s.Backend,
+		"root_path":        s.RootPath,
+		"redirect_url":     s.RedirectURL,
+		"accessListID":     s.AccessListID,
+		"errorTemplateID":  s.ErrorHandling.TemplateID,
+		"policyTemplateID": s.Response.PolicyTemplateID,
 	}
 }
 
@@ -11942,6 +12398,8 @@ func auditTypeForJSONItem(item any) string {
 		return "access-list"
 	case ErrorResponseTemplate:
 		return "error-response-template"
+	case HeaderPolicyTemplate:
+		return "header-policy-template"
 	default:
 		return "system"
 	}
@@ -11961,6 +12419,8 @@ func auditMetaForJSONItem(item any) map[string]any {
 		return map[string]any{"name": v.Name}
 	case ErrorResponseTemplate:
 		return map[string]any{"name": v.Name, "rules": len(v.Rules)}
+	case HeaderPolicyTemplate:
+		return map[string]any{"name": v.Name, "headers": len(v.Headers), "builtin": v.Builtin}
 	default:
 		return map[string]any{}
 	}

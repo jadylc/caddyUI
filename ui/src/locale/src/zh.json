@@ -257,6 +257,9 @@
   "action.retry": {
     "defaultMessage": "重试"
   },
+  "action.view": {
+    "defaultMessage": "查看"
+  },
   "action.view-details": {
     "defaultMessage": "查看详情"
   },
@@ -946,6 +949,12 @@
   },
   "error-response-templates": {
     "defaultMessage": "错误响应模板"
+  },
+  "header-policy-template": {
+    "defaultMessage": "策略模板"
+  },
+  "header-policy-templates": {
+    "defaultMessage": "策略模板"
   },
   "static-host": {
     "defaultMessage": "静态站点"

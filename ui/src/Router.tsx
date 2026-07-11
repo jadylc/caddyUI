@@ -24,6 +24,7 @@ const Streams = lazy(() => import("src/pages/Nginx/Streams"));
 const DynamicDNS = lazy(() => import("src/pages/Nginx/DynamicDNS"));
 const DomainMonitor = lazy(() => import("src/pages/Nginx/DomainMonitor"));
 const ErrorResponseTemplates = lazy(() => import("src/pages/Nginx/ErrorResponseTemplates"));
+const HeaderPolicyTemplates = lazy(() => import("src/pages/Nginx/HeaderPolicyTemplates"));
 const Observability = lazy(() => import("src/pages/Nginx/Observability"));
 const WakeOnLan = lazy(() => import("src/pages/WakeOnLan"));
 const Settings = lazy(() => import("src/pages/Settings"));
@@ -70,6 +71,7 @@ function Router() {
 							<Route path="/caddy/dynamic-dns" element={<DynamicDNS />} />
 							<Route path="/caddy/domain-monitor" element={<DomainMonitor />} />
 							<Route path="/caddy/error-response-templates" element={<ErrorResponseTemplates />} />
+							<Route path="/caddy/header-policy-templates" element={<HeaderPolicyTemplates />} />
 							<Route path="/caddy/observability" element={<Observability />} />
 							<Route path="/nginx/proxy" element={<Navigate to="/caddy/proxy" replace />} />
 							<Route path="/nginx/static" element={<Navigate to="/caddy/static" replace />} />
@@ -80,6 +82,10 @@ function Router() {
 							<Route
 								path="/nginx/error-response-templates"
 								element={<Navigate to="/caddy/error-response-templates" replace />}
+							/>
+							<Route
+								path="/nginx/header-policy-templates"
+								element={<Navigate to="/caddy/header-policy-templates" replace />}
 							/>
 							<Route
 								path="/nginx/observability"

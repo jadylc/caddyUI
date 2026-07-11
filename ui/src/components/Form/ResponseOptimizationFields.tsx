@@ -2,6 +2,7 @@ import cn from "classnames";
 import { Field, getIn, useFormikContext } from "formik";
 import { useState } from "react";
 import type { ResponseOptimizationConfig } from "src/api/backend";
+import { useHeaderPolicyTemplates } from "src/hooks";
 
 const fallbackCacheControl = "public, max-age=3600";
 
@@ -20,6 +21,7 @@ export const withResponseOptimizationDefaults = (
 	cacheControlEnabled: !!value?.cacheControlEnabled,
 	cacheControlValue: String(value?.cacheControlValue || defaultCacheControl),
 	securityHeadersEnabled: !!value?.securityHeadersEnabled,
+	policyTemplateId: Number(value?.policyTemplateId || 0),
 });
 
 export const normalizeResponseOptimization = (
@@ -32,6 +34,7 @@ export const normalizeResponseOptimization = (
 		cacheControlEnabled: !!cfg.cacheControlEnabled,
 		cacheControlValue: cfg.cacheControlEnabled ? String(cfg.cacheControlValue || defaultCacheControl).trim() : "",
 		securityHeadersEnabled: !!cfg.securityHeadersEnabled,
+		policyTemplateId: Number(cfg.policyTemplateId || 0),
 	};
 };
 
@@ -42,6 +45,7 @@ interface Props {
 
 export function ResponseOptimizationFields({ color = "bg-lime", defaultCacheControl = fallbackCacheControl }: Props) {
 	const { values, setFieldValue } = useFormikContext<any>();
+	const { data: policyTemplates } = useHeaderPolicyTemplates();
 	const [useCustomCacheControl, setUseCustomCacheControl] = useState(false);
 	const response = values.response ?? {};
 	const cacheValue = String(response.cacheControlValue || defaultCacheControl);
@@ -58,6 +62,23 @@ export function ResponseOptimizationFields({ color = "bg-lime", defaultCacheCont
 
 	return (
 		<div className="divide-y">
+			<div>
+				<label className="form-label" htmlFor="responsePolicyTemplateId">
+					策略模板
+				</label>
+				<Field as="select" id="responsePolicyTemplateId" name="response.policyTemplateId" className="form-select">
+					<option value={0}>不绑定模板</option>
+					{(policyTemplates || [])
+						.filter((template) => template.enabled)
+						.map((template) => (
+							<option key={template.id} value={template.id}>
+								{template.name}
+								{template.builtin ? "（内置）" : ""}
+							</option>
+						))}
+				</Field>
+				<div className="form-hint">绑定后会复用模板中的 CORS、CSP、缓存和安全响应头。</div>
+			</div>
 			<div>
 				<label className="row" htmlFor="responseCompressionEnabled">
 					<span className="col">压缩</span>

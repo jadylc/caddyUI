@@ -19,6 +19,8 @@ export * from "./useDynamicDNSItems";
 export * from "./useErrorResponseTemplate";
 export * from "./useErrorResponseTemplates";
 export * from "./useForwardAuthSettings";
+export * from "./useHeaderPolicyTemplate";
+export * from "./useHeaderPolicyTemplates";
 export * from "./useHealth";
 export * from "./useSystemSettings";
 export * from "./useHostReport";
