@@ -1705,7 +1705,7 @@ func TestCertDeleteHandlerDoesNotDeleteDNSCredentials(t *testing.T) {
 
 func TestVersionCheckUsesAppVersion(t *testing.T) {
 	oldVersion := appVersion
-	appVersion = "v1.0.8"
+	appVersion = "v1.1.0-unstable.4"
 	t.Cleanup(func() { appVersion = oldVersion })
 
 	req := httptest.NewRequest(http.MethodGet, "/version/check", nil)
@@ -1719,8 +1719,19 @@ func TestVersionCheckUsesAppVersion(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("json.Unmarshal error = %v", err)
 	}
-	if got["current"] != "v1.0.8" || got["latest"] != "v1.0.8" {
-		t.Fatalf("version response = %#v, want v1.0.8", got)
+	if got["current"] != "v1.1.0-unstable.4" || got["latest"] != "v1.1.0-unstable.4" {
+		t.Fatalf("version response = %#v, want v1.1.0-unstable.4", got)
+	}
+}
+
+func TestAppVersionPartsSupportsPrereleaseVersion(t *testing.T) {
+	oldVersion := appVersion
+	appVersion = "v1.2.3-unstable.4"
+	t.Cleanup(func() { appVersion = oldVersion })
+
+	major, minor, revision := appVersionParts()
+	if major != 1 || minor != 2 || revision != 3 {
+		t.Fatalf("version parts = %d.%d.%d, want 1.2.3", major, minor, revision)
 	}
 }
 

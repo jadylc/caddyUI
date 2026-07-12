@@ -47,6 +47,7 @@ FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS api-builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG GOPROXY=http://goproxy.cn,direct
+ARG APP_VERSION=dev
 # 清除 Docker Desktop 注入的失效代理，避免 Go 模块下载 TLS 超时
 ENV GOPROXY=$GOPROXY HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy=""
 WORKDIR /build
@@ -55,7 +56,8 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY backend/ ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /caddy-api .
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
+    -ldflags="-s -w -X main.appVersion=${APP_VERSION}" -o /caddy-api .
 
 # ===== 阶段4：最终运行镜像（裸 alpine，避免继承 caddy:alpine 的 EXPOSE） =====
 FROM alpine:3.20

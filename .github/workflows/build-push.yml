@@ -22,12 +22,20 @@ jobs:
 
       - name: Determine version
         id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            VERSION="$INPUT_VERSION"
           else
-            echo "tag=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            VERSION="${GITHUB_REF#refs/tags/}"
           fi
+          VERSION="${VERSION#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "Invalid version: $VERSION" >&2
+            exit 1
+          fi
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -50,5 +58,6 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-ui:${{ steps.version.outputs.tag }}
           build-args: |
             GOPROXY=https://proxy.golang.org|https://goproxy.cn|direct
+            APP_VERSION=v${{ steps.version.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

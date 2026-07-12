@@ -38,7 +38,7 @@ import (
 )
 
 var (
-	appVersion                = "v1.0.8"
+	appVersion                = "dev"
 	sitesDir                  = "/config/sites"
 	managedCertPrefix         = "__cert_"
 	wildcardGroupPrefix       = "__wildcard_group_"
@@ -6724,6 +6724,9 @@ func npmHealthHandler(w http.ResponseWriter, r *http.Request) {
 
 func appVersionParts() (int, int, int) {
 	value := strings.TrimPrefix(strings.TrimSpace(appVersion), "v")
+	if suffix := strings.IndexAny(value, "-+"); suffix >= 0 {
+		value = value[:suffix]
+	}
 	parts := strings.Split(value, ".")
 	if len(parts) != 3 {
 		return 0, 0, 0
