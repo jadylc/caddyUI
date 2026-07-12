@@ -13043,10 +13043,13 @@ type observabilitySiteUpstream struct {
 }
 
 type observabilityLogEvent struct {
-	Time    string `json:"time,omitempty"`
-	Level   string `json:"level"`
-	Message string `json:"message"`
-	Source  string `json:"source"`
+	Time     string   `json:"time,omitempty"`
+	Level    string   `json:"level"`
+	Message  string   `json:"message"`
+	Source   string   `json:"source"`
+	Sites    []string `json:"sites,omitempty"`
+	Host     string   `json:"-"`
+	Upstream string   `json:"-"`
 }
 
 type observabilityErrorTrend struct {
@@ -13071,6 +13074,8 @@ type accessLogObservation struct {
 	Status          int
 	DurationSeconds float64
 	Message         string
+	Method          string
+	URI             string
 }
 
 var observabilityRate = struct {
@@ -13091,12 +13096,10 @@ func observabilityHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func collectObservabilityOverview(now time.Time) observabilityOverview {
-	recentErrors := readRuntimeLogEvents(20, now, 24*time.Hour)
+	runtimeErrors := readRuntimeLogEvents(0, now, 24*time.Hour)
 	overview := observabilityOverview{
-		CollectedAt:  localTimestamp(now),
-		Available:    true,
-		RecentErrors: recentErrors,
-		ErrorTrend:   buildErrorTrend(recentErrors, now),
+		CollectedAt: localTimestamp(now),
+		Available:   true,
 	}
 
 	metricsText, err := fetchCaddyMetrics()
@@ -13112,9 +13115,13 @@ func collectObservabilityOverview(now time.Time) observabilityOverview {
 	if err == nil {
 		applyUpstreamVerificationStatus(overview.Upstreams, activeHealthCheckUpstreams(sites))
 		overview.Sites = buildSiteObservability(sites, upstreamStatusMap(overview.Upstreams))
+		runtimeErrors = associateRuntimeLogEvents(runtimeErrors, sites)
 	} else if overview.Error == "" {
 		overview.Error = err.Error()
 	}
+	allErrors := mergeObservabilityErrors(runtimeErrors, overview.Sites, now, 24*time.Hour)
+	overview.ErrorTrend = buildErrorTrend(allErrors, now)
+	overview.RecentErrors = limitObservabilityLogEvents(allErrors, 20)
 	return overview
 }
 
@@ -13445,8 +13452,9 @@ func buildSiteObservability(sites []Site, upstreamStatuses map[string]string) []
 						row.RecentErrors = append(row.RecentErrors, observabilityLogEvent{
 							Time:    observabilityTimestamp(obs.At),
 							Level:   "error",
-							Message: fmt.Sprintf("HTTP %d %s", obs.Status, strings.TrimSpace(obs.Message)),
-							Source:  site.Name,
+							Message: formatAccessLogErrorMessage(obs),
+							Source:  "访问日志",
+							Sites:   []string{site.Name},
 						})
 					}
 				}
@@ -13540,7 +13548,26 @@ func parseAccessLogObservation(line string) (accessLogObservation, bool) {
 		DurationSeconds: floatFromAny(raw["duration"]),
 		Message:         stringFromAny(raw["msg"]),
 	}
+	if request, ok := raw["request"].(map[string]any); ok {
+		obs.Method = strings.ToUpper(stringFromAny(request["method"]))
+		obs.URI = stringFromAny(request["uri"])
+	}
 	return obs, true
+}
+
+func formatAccessLogErrorMessage(obs accessLogObservation) string {
+	parts := []string{fmt.Sprintf("HTTP %d", obs.Status)}
+	if obs.Method != "" {
+		parts = append(parts, obs.Method)
+	}
+	if obs.URI != "" {
+		parts = append(parts, obs.URI)
+	}
+	message := strings.TrimSpace(obs.Message)
+	if message != "" && !strings.EqualFold(message, "handled request") {
+		parts = append(parts, message)
+	}
+	return strings.Join(parts, " ")
 }
 
 func readRuntimeLogEvents(limit int, now time.Time, window time.Duration) []observabilityLogEvent {
@@ -13614,10 +13641,12 @@ func parseRuntimeLogEvent(line string) (observabilityLogEvent, bool) {
 			source = "caddy"
 		}
 		return observabilityLogEvent{
-			Time:    observabilityTimestamp(timeFromAny(raw["ts"])),
-			Level:   level,
-			Message: msg,
-			Source:  source,
+			Time:     observabilityTimestamp(timeFromAny(raw["ts"])),
+			Level:    level,
+			Message:  msg,
+			Source:   source,
+			Host:     runtimeLogRequestHost(raw),
+			Upstream: normalizeUpstreamAddress(stringFromAny(raw["upstream"])),
 		}, true
 	}
 	level := ""
@@ -13631,6 +13660,108 @@ func parseRuntimeLogEvent(line string) (observabilityLogEvent, bool) {
 		return observabilityLogEvent{}, false
 	}
 	return observabilityLogEvent{Level: level, Message: line, Source: "caddy"}, true
+}
+
+func runtimeLogRequestHost(raw map[string]any) string {
+	if request, ok := raw["request"].(map[string]any); ok {
+		if host := certDomainKey(stringFromAny(request["host"])); host != "" {
+			return host
+		}
+		if headers, ok := request["headers"].(map[string]any); ok {
+			if values, ok := headers["Host"].([]any); ok && len(values) > 0 {
+				return certDomainKey(stringFromAny(values[0]))
+			}
+		}
+	}
+	return certDomainKey(stringFromAny(raw["host"]))
+}
+
+func associateRuntimeLogEvents(events []observabilityLogEvent, sites []Site) []observabilityLogEvent {
+	upstreamSites := map[string][]string{}
+	for _, site := range sites {
+		for _, upstream := range siteObservabilityUpstreams(site, nil) {
+			upstreamSites[upstream.Address] = append(upstreamSites[upstream.Address], site.Name)
+		}
+	}
+	for upstream, names := range upstreamSites {
+		upstreamSites[upstream] = uniqueSortedStrings(names)
+	}
+
+	out := make([]observabilityLogEvent, len(events))
+	copy(out, events)
+	for idx := range out {
+		matched := append([]string{}, out[idx].Sites...)
+		if out[idx].Host != "" {
+			for _, site := range sites {
+				if observabilityHostMatchesSite(out[idx].Host, site) {
+					matched = append(matched, site.Name)
+				}
+			}
+		}
+		if out[idx].Upstream != "" {
+			matched = append(matched, upstreamSites[out[idx].Upstream]...)
+		}
+		message := strings.ToLower(out[idx].Message)
+		for upstream, names := range upstreamSites {
+			if upstream != "" && strings.Contains(message, strings.ToLower(upstream)) {
+				matched = append(matched, names...)
+			}
+		}
+		out[idx].Sites = uniqueSortedStrings(matched)
+	}
+	return out
+}
+
+func observabilityHostMatchesSite(host string, site Site) bool {
+	host = certDomainKey(host)
+	if host == "" {
+		return false
+	}
+	for _, domain := range splitDomains(site.Domain) {
+		domain = certDomainKey(domain)
+		if host == domain {
+			return true
+		}
+		if strings.HasPrefix(domain, "*.") && strings.HasSuffix(host, strings.TrimPrefix(domain, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeObservabilityErrors(runtime []observabilityLogEvent, sites []observabilitySite, now time.Time, window time.Duration) []observabilityLogEvent {
+	items := append([]observabilityLogEvent{}, runtime...)
+	for _, site := range sites {
+		items = append(items, site.RecentErrors...)
+	}
+
+	seen := map[string]bool{}
+	out := make([]observabilityLogEvent, 0, len(items))
+	for _, event := range items {
+		if !observabilityEventWithinWindow(event, now, window) {
+			continue
+		}
+		event.Sites = uniqueSortedStrings(event.Sites)
+		key := event.Time + "\x00" + event.Source + "\x00" + event.Message + "\x00" + strings.Join(event.Sites, ",")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, event)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left, _ := parseLocalOrRFC3339Time(out[i].Time)
+		right, _ := parseLocalOrRFC3339Time(out[j].Time)
+		return left.After(right)
+	})
+	return out
+}
+
+func limitObservabilityLogEvents(events []observabilityLogEvent, limit int) []observabilityLogEvent {
+	if limit <= 0 || len(events) <= limit {
+		return events
+	}
+	return events[:limit]
 }
 
 func isLowLevelRuntimeLogMessage(message string) bool {

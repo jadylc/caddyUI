@@ -1,8 +1,9 @@
+import { IconHelp } from "@tabler/icons-react";
 import Alert from "react-bootstrap/Alert";
-import { LoadingPage } from "src/components";
+import { Button, LoadingPage } from "src/components";
 import { useAuditLogs } from "src/hooks";
 import { T } from "src/locale";
-import { showEventDetailsModal } from "src/modals";
+import { showEventDetailsModal, showHelpModal } from "src/modals";
 import Table from "./Table";
 
 export default function TableWrapper() {
@@ -26,6 +27,16 @@ export default function TableWrapper() {
 							<h2 className="mt-1 mb-0">
 								<T id="auditlogs" />
 							</h2>
+						</div>
+						<div className="col-auto">
+							<Button
+								size="sm"
+								onClick={() => showHelpModal("AuditLogs", "purple")}
+								title="功能说明"
+								ariaLabel="功能说明"
+							>
+								<IconHelp size={20} />
+							</Button>
 						</div>
 					</div>
 				</div>

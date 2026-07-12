@@ -4,6 +4,7 @@ import {
 	IconAlertTriangle,
 	IconClock,
 	IconGauge,
+	IconHelp,
 	IconRefresh,
 	IconServer,
 } from "@tabler/icons-react";
@@ -11,6 +12,7 @@ import type React from "react";
 import Alert from "react-bootstrap/Alert";
 import { Button, LoadingPage } from "src/components";
 import { useObservability } from "src/hooks";
+import { showHelpModal } from "src/modals";
 import type { ObservabilityLogEvent, ObservabilitySite, ObservabilitySiteUpstream } from "src/api/backend";
 import styles from "./Observability.module.css";
 
@@ -170,7 +172,7 @@ function ErrorRows({ events, emptyText }: { events?: ObservabilityLogEvent[]; em
 	if (!events?.length) {
 		return (
 			<tr>
-				<td colSpan={3} className="text-center text-muted py-4">
+				<td colSpan={4} className="text-center text-muted py-4">
 					{emptyText}
 				</td>
 			</tr>
@@ -181,6 +183,13 @@ function ErrorRows({ events, emptyText }: { events?: ObservabilityLogEvent[]; em
 			{events.map((event, idx) => (
 				<tr key={`${event.time}-${event.source}-${idx}`}>
 					<td className="text-nowrap">{event.time || "-"}</td>
+					<td>
+						{event.sites?.length ? (
+							<span className={styles.errorSites}>{event.sites.join("、")}</span>
+						) : (
+							<span className="text-muted">全局</span>
+						)}
+					</td>
 					<td className="text-nowrap">{event.source || "-"}</td>
 					<td className="text-break">
 						<div className={styles.errorMessage}>
@@ -264,7 +273,16 @@ export default function ObservabilityPage() {
 					<h2 className="mb-0">运行观测</h2>
 					<div className="text-muted small">采集时间：{data.collectedAt || "-"}</div>
 				</div>
-				<div className="col-auto">
+				<div className="col-auto d-flex gap-2">
+					<Button
+						size="sm"
+						variant="ghost"
+						onClick={() => showHelpModal("Observability", "azure")}
+						title="功能说明"
+						ariaLabel="功能说明"
+					>
+						<IconHelp size={18} />
+					</Button>
 					<Button size="sm" variant="ghost" isLoading={isFetching} onClick={() => refetch()}>
 						<IconRefresh size={18} />
 					</Button>
@@ -389,6 +407,7 @@ export default function ObservabilityPage() {
 								<thead>
 									<tr>
 										<th>时间</th>
+										<th>关联站点</th>
 										<th>来源</th>
 										<th>内容</th>
 									</tr>

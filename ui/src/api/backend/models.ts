@@ -302,6 +302,7 @@ export interface ObservabilityLogEvent {
 	level: "error" | "warn" | string;
 	message: string;
 	source: string;
+	sites?: string[];
 }
 
 export interface ObservabilityErrorTrend {

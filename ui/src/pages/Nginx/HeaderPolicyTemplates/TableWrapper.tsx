@@ -1,4 +1,4 @@
-import { IconPlus, IconRefresh, IconSearch } from "@tabler/icons-react";
+import { IconHelp, IconPlus, IconRefresh, IconSearch } from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Alert from "react-bootstrap/Alert";
@@ -6,7 +6,7 @@ import { deleteHeaderPolicyTemplate, toggleHeaderPolicyTemplate } from "src/api/
 import { Button, HasPermission, LoadingPage } from "src/components";
 import { useHeaderPolicyTemplates } from "src/hooks";
 import { T } from "src/locale";
-import { showDeleteConfirmModal, showHeaderPolicyTemplateModal } from "src/modals";
+import { showDeleteConfirmModal, showHeaderPolicyTemplateModal, showHelpModal } from "src/modals";
 import { MANAGE, PROXY_HOSTS } from "src/modules/Permissions";
 import { showObjectSuccess } from "src/notifications";
 import Table from "./Table";
@@ -73,6 +73,14 @@ export default function TableWrapper() {
 										/>
 									</div>
 								) : null}
+								<Button
+									size="sm"
+									onClick={() => showHelpModal("HeaderPolicyTemplates", "lime")}
+									title="功能说明"
+									ariaLabel="功能说明"
+								>
+									<IconHelp size={20} />
+								</Button>
 								<Button size="sm" onClick={handleRefresh} disabled={isFetching}>
 									<IconRefresh size={20} />
 								</Button>

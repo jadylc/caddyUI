@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -405,6 +406,67 @@ func TestParseRuntimeLogEventSkipsLowLevelConfigFormattingWarning(t *testing.T) 
 
 	if event, ok := parseRuntimeLogEvent(line); ok {
 		t.Fatalf("parseRuntimeLogEvent = %#v, want skipped", event)
+	}
+}
+
+func TestParseRuntimeLogEventKeepsAssociationHints(t *testing.T) {
+	line := `{"level":"error","ts":1893456000,"logger":"http.log.error","msg":"upstream failed","upstream":"http://10.0.0.2:8080/api","request":{"host":"app.example.com:443"}}`
+
+	event, ok := parseRuntimeLogEvent(line)
+	if !ok {
+		t.Fatal("parseRuntimeLogEvent returned false")
+	}
+	if event.Host != "app.example.com" || event.Upstream != "10.0.0.2:8080" {
+		t.Fatalf("association hints = host %q upstream %q", event.Host, event.Upstream)
+	}
+}
+
+func TestAssociateRuntimeLogEventsUsesHostWildcardAndUpstream(t *testing.T) {
+	sites := []Site{
+		{Name: "app", Kind: "proxy", Domain: "app.example.com", Backend: "http://10.0.0.1:8080"},
+		{Name: "wildcard", Kind: "proxy", Domain: "*.internal.example.com", Backend: "http://10.0.0.2:8080"},
+		{Name: "shared", Kind: "proxy", Domain: "shared.example.com", Backend: "http://10.0.0.2:8080"},
+	}
+	events := []observabilityLogEvent{
+		{Message: "request failed", Host: "app.example.com"},
+		{Message: "request failed", Host: "api.internal.example.com"},
+		{Message: "dial tcp 10.0.0.2:8080: connection refused"},
+		{Message: "configuration reload failed"},
+	}
+
+	got := associateRuntimeLogEvents(events, sites)
+	if !reflect.DeepEqual(got[0].Sites, []string{"app"}) {
+		t.Fatalf("exact host sites = %#v", got[0].Sites)
+	}
+	if !reflect.DeepEqual(got[1].Sites, []string{"wildcard"}) {
+		t.Fatalf("wildcard host sites = %#v", got[1].Sites)
+	}
+	if !reflect.DeepEqual(got[2].Sites, []string{"shared", "wildcard"}) {
+		t.Fatalf("shared upstream sites = %#v", got[2].Sites)
+	}
+	if len(got[3].Sites) != 0 {
+		t.Fatalf("global event sites = %#v", got[3].Sites)
+	}
+}
+
+func TestMergeObservabilityErrorsCombinesSitesSortsAndDeduplicates(t *testing.T) {
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.Local)
+	runtime := []observabilityLogEvent{
+		{Time: "2026-07-12 09:58:00", Level: "error", Source: "caddy", Message: "global"},
+		{Time: "2026-07-12 09:59:00", Level: "error", Source: "reverse_proxy", Message: "failed", Sites: []string{"app"}},
+		{Time: "2026-07-12 09:59:00", Level: "error", Source: "reverse_proxy", Message: "failed", Sites: []string{"app"}},
+	}
+	sites := []observabilitySite{{RecentErrors: []observabilityLogEvent{
+		{Time: "2026-07-12 09:59:30", Level: "error", Source: "访问日志", Message: "HTTP 502 GET /api", Sites: []string{"api"}},
+		{Time: "2026-07-10 09:59:30", Level: "error", Source: "访问日志", Message: "HTTP 500", Sites: []string{"stale"}},
+	}}}
+
+	got := mergeObservabilityErrors(runtime, sites, now, 24*time.Hour)
+	if len(got) != 3 {
+		t.Fatalf("merged errors len = %d, want 3: %#v", len(got), got)
+	}
+	if got[0].Sites[0] != "api" || got[1].Sites[0] != "app" || len(got[2].Sites) != 0 {
+		t.Fatalf("merged order/associations = %#v", got)
 	}
 }
 

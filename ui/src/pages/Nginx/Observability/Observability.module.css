@@ -128,12 +128,17 @@ td.statusEmpty {
 	color: var(--tblr-danger);
 }
 
+.errorSites {
+	color: var(--tblr-primary);
+	font-weight: 500;
+}
+
 .siteTable {
 	min-width: 980px;
 }
 
 .errorTable {
-	min-width: 760px;
+	min-width: 900px;
 }
 
 @media (max-width: 767.98px) {
