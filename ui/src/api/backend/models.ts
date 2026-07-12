@@ -281,6 +281,7 @@ export interface ObservabilityTraffic {
 	qps: number;
 	inFlight: number;
 	p95Ms: number;
+	p95Capped: boolean;
 	statusClasses: Record<string, number>;
 	methods: Record<string, number>;
 }

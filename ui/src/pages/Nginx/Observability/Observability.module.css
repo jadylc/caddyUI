@@ -1,0 +1,147 @@
+.statusDistribution {
+	display: grid;
+	gap: 20px;
+}
+
+.statusTrack {
+	display: flex;
+	height: 8px;
+	overflow: hidden;
+	background: var(--tblr-border-color-translucent);
+	border-radius: 4px;
+}
+
+.statusLegend {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 16px;
+}
+
+.statusLegendItem {
+	display: grid;
+	grid-template-columns: auto 1fr auto auto;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.statusDot,
+.upstreamDot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	flex: 0 0 8px;
+	border-radius: 50%;
+}
+
+.statusSuccess {
+	color: var(--tblr-success);
+	background-color: var(--tblr-success);
+}
+
+.statusRedirect {
+	color: var(--tblr-cyan);
+	background-color: var(--tblr-cyan);
+}
+
+.statusClientError {
+	color: var(--tblr-yellow);
+	background-color: var(--tblr-yellow);
+}
+
+.statusServerError {
+	color: var(--tblr-danger);
+	background-color: var(--tblr-danger);
+}
+
+.statusEmpty {
+	color: var(--tblr-secondary);
+	background-color: var(--tblr-secondary);
+}
+
+td.statusSuccess,
+td.statusRedirect,
+td.statusClientError,
+td.statusServerError,
+td.statusEmpty {
+	font-variant-numeric: tabular-nums;
+	background: transparent;
+}
+
+.upstreamGrid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	column-gap: 32px;
+}
+
+.upstreamStatus {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 9px 0;
+	border-bottom: 1px solid var(--tblr-border-color-translucent);
+}
+
+.upstreamAddress {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.upstream_healthy {
+	background: var(--tblr-success);
+}
+
+.upstream_unhealthy {
+	background: var(--tblr-danger);
+}
+
+.upstream_unknown {
+	background: var(--tblr-secondary);
+	box-shadow: inset 0 0 0 1px var(--tblr-border-color);
+}
+
+.siteUpstreams {
+	display: grid;
+	gap: 2px;
+}
+
+.siteUpstreams .upstreamStatus {
+	padding: 2px 0;
+	border: 0;
+}
+
+.enabledText {
+	color: var(--tblr-success);
+}
+
+.errorMessage {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	color: var(--tblr-body-color);
+}
+
+.errorMessage svg {
+	flex: 0 0 auto;
+	margin-top: 2px;
+	color: var(--tblr-danger);
+}
+
+.siteTable {
+	min-width: 980px;
+}
+
+.errorTable {
+	min-width: 760px;
+}
+
+@media (max-width: 767.98px) {
+	.statusLegend {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.upstreamGrid {
+		grid-template-columns: 1fr;
+	}
+}

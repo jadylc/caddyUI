@@ -1,5 +1,6 @@
 import {
 	IconActivityHeartbeat,
+	IconAlertCircle,
 	IconAlertTriangle,
 	IconClock,
 	IconGauge,
@@ -11,6 +12,7 @@ import Alert from "react-bootstrap/Alert";
 import { Button, LoadingPage } from "src/components";
 import { useObservability } from "src/hooks";
 import type { ObservabilityLogEvent, ObservabilitySite, ObservabilitySiteUpstream } from "src/api/backend";
+import styles from "./Observability.module.css";
 
 const statusKeys = ["2xx", "3xx", "4xx", "5xx"] as const;
 
@@ -30,29 +32,24 @@ function fmtMs(value?: number) {
 	return `${fmtDecimal(value, value >= 100 ? 0 : 1)} ms`;
 }
 
-function statusClassBadge(key: string) {
-	switch (key) {
-		case "2xx":
-			return "bg-success";
-		case "3xx":
-			return "bg-info";
-		case "4xx":
-			return "bg-warning text-dark";
-		case "5xx":
-			return "bg-danger";
-		default:
-			return "bg-secondary";
-	}
+function fmtP95(value?: number, capped?: boolean) {
+	if (!value) return "-";
+	if (capped && value >= 1000) return `> ${fmtDecimal(value / 1000, value % 1000 ? 1 : 0)} s`;
+	return fmtMs(value);
 }
 
-function upstreamBadge(status: string) {
-	switch (status) {
-		case "healthy":
-			return "bg-success";
-		case "unhealthy":
-			return "bg-danger";
+function statusTone(key: string) {
+	switch (key) {
+		case "2xx":
+			return styles.statusSuccess;
+		case "3xx":
+			return styles.statusRedirect;
+		case "4xx":
+			return styles.statusClientError;
+		case "5xx":
+			return styles.statusServerError;
 		default:
-			return "bg-secondary";
+			return styles.statusEmpty;
 	}
 }
 
@@ -63,7 +60,7 @@ function upstreamText(status: string) {
 		case "unhealthy":
 			return "异常";
 		default:
-			return "未检测";
+			return "未配置检测";
 	}
 }
 
@@ -87,24 +84,28 @@ function statusTotal(classes?: Record<string, number>) {
 function StatusBuckets({ classes }: { classes?: Record<string, number> }) {
 	const total = statusTotal(classes);
 	return (
-		<div className="d-flex flex-column gap-2">
+		<div className={styles.statusDistribution}>
+			<div className={styles.statusTrack} role="img" aria-label={`共 ${fmtNumber(total)} 个响应`}>
+				{statusKeys.map((key) => {
+					const count = classes?.[key] || 0;
+					const pct = total ? (count / total) * 100 : 0;
+					return pct ? <span key={key} className={statusTone(key)} style={{ width: `${pct}%` }} /> : null;
+				})}
+			</div>
+			<div className={styles.statusLegend}>
 			{statusKeys.map((key) => {
 				const count = classes?.[key] || 0;
 				const pct = total ? Math.round((count / total) * 100) : 0;
 				return (
-					<div key={key}>
-						<div className="d-flex justify-content-between small mb-1">
-							<span className={`badge ${statusClassBadge(key)}`}>{key}</span>
-							<span className="text-muted">
-								{fmtNumber(count)} / {pct}%
-							</span>
-						</div>
-						<div className="progress progress-sm">
-							<div className={`progress-bar ${statusClassBadge(key)}`} style={{ width: `${pct}%` }} />
-						</div>
+					<div className={styles.statusLegendItem} key={key}>
+						<span className={`${styles.statusDot} ${statusTone(key)}`} />
+						<span>{key}</span>
+						<strong>{fmtNumber(count)}</strong>
+						<span className="text-muted">{pct}%</span>
 					</div>
 				);
 			})}
+			</div>
 		</div>
 	);
 }
@@ -147,12 +148,20 @@ function UpstreamList({ upstreams }: { upstreams?: ObservabilitySiteUpstream[] }
 		return <span className="text-muted">-</span>;
 	}
 	return (
-		<div className="d-flex flex-wrap gap-1">
+		<div className={styles.siteUpstreams}>
 			{upstreams.map((upstream) => (
-				<span className={`badge ${upstreamBadge(upstream.status)}`} key={upstream.address}>
-					{upstream.address} · {upstreamText(upstream.status)}
-				</span>
+				<UpstreamStatus address={upstream.address} status={upstream.status} key={upstream.address} />
 			))}
+		</div>
+	);
+}
+
+function UpstreamStatus({ address, status }: { address: string; status: string }) {
+	return (
+		<div className={styles.upstreamStatus}>
+			<span className={`${styles.upstreamDot} ${styles[`upstream_${status}`] || styles.upstream_unknown}`} />
+			<span className={styles.upstreamAddress}>{address}</span>
+			<span className="text-muted small">{upstreamText(status)}</span>
 		</div>
 	);
 }
@@ -161,7 +170,7 @@ function ErrorRows({ events, emptyText }: { events?: ObservabilityLogEvent[]; em
 	if (!events?.length) {
 		return (
 			<tr>
-				<td colSpan={4} className="text-center text-muted py-4">
+				<td colSpan={3} className="text-center text-muted py-4">
 					{emptyText}
 				</td>
 			</tr>
@@ -172,13 +181,13 @@ function ErrorRows({ events, emptyText }: { events?: ObservabilityLogEvent[]; em
 			{events.map((event, idx) => (
 				<tr key={`${event.time}-${event.source}-${idx}`}>
 					<td className="text-nowrap">{event.time || "-"}</td>
-					<td>
-						<span className={`badge ${event.level === "error" ? "bg-danger" : "bg-warning text-dark"}`}>
-							{event.level === "error" ? "错误" : "告警"}
-						</span>
-					</td>
 					<td className="text-nowrap">{event.source || "-"}</td>
-					<td className="text-break">{event.message}</td>
+					<td className="text-break">
+						<div className={styles.errorMessage}>
+							<IconAlertCircle size={16} />
+							<span>{event.message}</span>
+						</div>
+					</td>
 				</tr>
 			))}
 		</>
@@ -206,16 +215,16 @@ function SiteRows({ sites }: { sites: ObservabilitySite[] }) {
 					<td className="text-break">{site.domains?.join("、") || "-"}</td>
 					<td>
 						{site.accessLogEnabled ? (
-							<span className="badge bg-success">已启用</span>
+							<span className={styles.enabledText}>已启用</span>
 						) : (
-							<span className="badge bg-secondary">未启用</span>
+							<span className="text-muted">未启用</span>
 						)}
 					</td>
 					<td className="text-end">{fmtNumber(site.requests)}</td>
 					<td className="text-end">{fmtMs(site.p95Ms)}</td>
 					{statusKeys.map((key) => (
-						<td className="text-end" key={key}>
-							<span className={`badge ${statusClassBadge(key)}`}>{fmtNumber(site.statusClasses?.[key])}</span>
+						<td className={`text-end ${statusTone(key)}`} key={key}>
+							{fmtNumber(site.statusClasses?.[key])}
 						</td>
 					))}
 					<td>
@@ -237,10 +246,11 @@ export default function ObservabilityPage() {
 	const healthyUpstreams = data.upstreams.filter((item) => item.status === "healthy").length;
 	const unhealthyUpstreams = data.upstreams.filter((item) => item.status === "unhealthy").length;
 	const unknownUpstreams = data.upstreams.filter((item) => item.status === "unknown").length;
+	const checkedUpstreams = healthyUpstreams + unhealthyUpstreams;
 	const upstreamSubtitle = data.upstreams.length
 		? [
 				unhealthyUpstreams ? `${fmtNumber(unhealthyUpstreams)} 个异常` : "",
-				unknownUpstreams ? `${fmtNumber(unknownUpstreams)} 个未检测` : "",
+				unknownUpstreams ? `${fmtNumber(unknownUpstreams)} 个未配置主动检查` : "",
 				!unhealthyUpstreams && !unknownUpstreams ? "全部已验证正常" : "",
 			]
 				.filter(Boolean)
@@ -275,14 +285,18 @@ export default function ObservabilityPage() {
 				/>
 				<MetricCard
 					title="P95 延迟"
-					value={fmtMs(data.traffic.p95Ms)}
-					subtitle={`${fmtNumber(data.traffic.inFlight)} 个处理中请求`}
+					value={fmtP95(data.traffic.p95Ms, data.traffic.p95Capped)}
+					subtitle={
+						data.traffic.p95Capped
+							? `高于可精确估算范围 · ${fmtNumber(data.traffic.inFlight)} 个处理中请求`
+							: `${fmtNumber(data.traffic.inFlight)} 个处理中请求`
+					}
 					icon={<IconGauge size={24} />}
 					color="bg-green"
 				/>
 				<MetricCard
-					title="上游状态"
-					value={`${fmtNumber(healthyUpstreams)} / ${fmtNumber(data.upstreams.length)}`}
+					title="上游检测"
+					value={checkedUpstreams ? `${fmtNumber(healthyUpstreams)} / ${fmtNumber(checkedUpstreams)} 正常` : "未启用"}
 					subtitle={upstreamSubtitle}
 					icon={<IconServer size={24} />}
 					color={unhealthyUpstreams ? "bg-red" : unknownUpstreams ? "bg-secondary" : "bg-indigo"}
@@ -297,50 +311,35 @@ export default function ObservabilityPage() {
 			</div>
 
 			<div className="row row-cards">
-				<div className="col-lg-5">
+				<div className="col-12">
 					<div className="card">
 						<div className="card-header">
 							<h3 className="card-title">状态码分布</h3>
+							<div className="card-actions text-muted small">共 {fmtNumber(statusTotal(data.traffic.statusClasses))} 个响应</div>
 						</div>
 						<div className="card-body">
 							<StatusBuckets classes={data.traffic.statusClasses} />
 						</div>
 					</div>
 				</div>
-				<div className="col-lg-7">
+				<div className="col-12">
 					<div className="card">
 						<div className="card-header">
 							<h3 className="card-title">上游状态</h3>
+							<div className="card-actions text-muted small">
+								主动检测 {fmtNumber(checkedUpstreams)} / {fmtNumber(data.upstreams.length)}
+							</div>
 						</div>
-						<div className="table-responsive">
-							<table className="table card-table table-vcenter">
-								<thead>
-									<tr>
-										<th>上游</th>
-										<th className="w-1">状态</th>
-									</tr>
-								</thead>
-								<tbody>
-									{data.upstreams.length ? (
-										data.upstreams.map((upstream) => (
-											<tr key={upstream.address}>
-												<td className="text-break">{upstream.address}</td>
-												<td>
-													<span className={`badge ${upstreamBadge(upstream.status)}`}>
-														{upstreamText(upstream.status)}
-													</span>
-												</td>
-											</tr>
-										))
-									) : (
-										<tr>
-											<td colSpan={2} className="text-center text-muted py-4">
-												暂无上游状态数据
-											</td>
-										</tr>
-									)}
-								</tbody>
-							</table>
+						<div className="card-body">
+							{data.upstreams.length ? (
+								<div className={styles.upstreamGrid}>
+									{data.upstreams.map((upstream) => (
+										<UpstreamStatus address={upstream.address} status={upstream.status} key={upstream.address} />
+									))}
+								</div>
+							) : (
+								<div className="text-center text-muted py-3">暂无上游状态数据</div>
+							)}
 						</div>
 					</div>
 				</div>
@@ -351,7 +350,7 @@ export default function ObservabilityPage() {
 							<h3 className="card-title">站点详情</h3>
 						</div>
 						<div className="table-responsive">
-							<table className="table card-table table-vcenter">
+							<table className={`table card-table table-vcenter ${styles.siteTable}`}>
 								<thead>
 									<tr>
 										<th>站点</th>
@@ -386,17 +385,16 @@ export default function ObservabilityPage() {
 							<h3 className="card-title">最近错误</h3>
 						</div>
 						<div className="table-responsive">
-							<table className="table card-table table-vcenter">
+							<table className={`table card-table table-vcenter ${styles.errorTable}`}>
 								<thead>
 									<tr>
 										<th>时间</th>
-										<th>级别</th>
 										<th>来源</th>
 										<th>内容</th>
 									</tr>
 								</thead>
 								<tbody>
-									<ErrorRows events={data.recentErrors} emptyText="暂无错误或告警" />
+									<ErrorRows events={data.recentErrors} emptyText="暂无错误" />
 								</tbody>
 							</table>
 						</div>

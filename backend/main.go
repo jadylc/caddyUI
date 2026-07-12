@@ -13013,6 +13013,7 @@ type observabilityTraffic struct {
 	QPS           float64          `json:"qps"`
 	InFlight      int64            `json:"in_flight"`
 	P95MS         float64          `json:"p95_ms"`
+	P95Capped     bool             `json:"p95_capped"`
 	StatusClasses map[string]int64 `json:"status_classes"`
 	Methods       map[string]int64 `json:"methods"`
 }
@@ -13195,11 +13196,13 @@ func applyObservabilityMetrics(overview *observabilityOverview, samples []promet
 	total := int64(math.Round(math.Max(requestTotal, responseCount)))
 	overview.Reload = reload
 	overview.Upstreams = mergeObservabilityUpstreams(upstreams)
+	p95MS, p95Capped := histogramQuantileMS(0.95, buckets, responseCount)
 	overview.Traffic = observabilityTraffic{
 		TotalRequests: total,
 		QPS:           updateObservabilityQPS(total, now),
 		InFlight:      int64(math.Round(inFlight)),
-		P95MS:         histogramQuantileMS(0.95, buckets, responseCount),
+		P95MS:         p95MS,
+		P95Capped:     p95Capped,
 		StatusClasses: statusClasses,
 		Methods:       methods,
 	}
@@ -13563,12 +13566,15 @@ func readRuntimeLogEvents(limit int, now time.Time, window time.Duration) []obse
 }
 
 func observabilityEventWithinWindow(event observabilityLogEvent, now time.Time, window time.Duration) bool {
-	if window <= 0 || event.Time == "" {
+	if event.Time == "" {
+		return false
+	}
+	if window <= 0 {
 		return true
 	}
 	at, ok := parseLocalOrRFC3339Time(event.Time)
 	if !ok {
-		return true
+		return false
 	}
 	age := now.Sub(at)
 	return age >= 0 && age <= window
@@ -13781,9 +13787,9 @@ func parsePrometheusBucket(value string) (float64, bool) {
 	return out, err == nil
 }
 
-func histogramQuantileMS(q float64, buckets map[float64]float64, count float64) float64 {
+func histogramQuantileMS(q float64, buckets map[float64]float64, count float64) (float64, bool) {
 	if count <= 0 || len(buckets) == 0 {
-		return 0
+		return 0, false
 	}
 	keys := make([]float64, 0, len(buckets))
 	for key := range buckets {
@@ -13791,19 +13797,27 @@ func histogramQuantileMS(q float64, buckets map[float64]float64, count float64) 
 	}
 	sort.Float64s(keys)
 	target := count * q
-	lastFinite := 0.0
+	previousUpper := 0.0
+	previousCount := 0.0
 	for _, key := range keys {
-		if !math.IsInf(key, 0) {
-			lastFinite = key
-		}
-		if buckets[key] >= target {
+		bucketCount := buckets[key]
+		if bucketCount >= target {
 			if math.IsInf(key, 0) {
-				return roundFloat(lastFinite*1000, 2)
+				return roundFloat(previousUpper*1000, 2), true
 			}
-			return roundFloat(key*1000, 2)
+			if bucketCount <= previousCount {
+				return roundFloat(key*1000, 2), false
+			}
+			fraction := (target - previousCount) / (bucketCount - previousCount)
+			estimate := previousUpper + (key-previousUpper)*fraction
+			return roundFloat(estimate*1000, 2), false
+		}
+		if !math.IsInf(key, 0) {
+			previousUpper = key
+			previousCount = bucketCount
 		}
 	}
-	return roundFloat(lastFinite*1000, 2)
+	return roundFloat(previousUpper*1000, 2), true
 }
 
 func percentileMS(values []float64, q float64) float64 {

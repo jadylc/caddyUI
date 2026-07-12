@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -244,8 +245,8 @@ caddy_config_last_reload_successful 1
 	if overview.Traffic.Methods["GET"] != 9 || overview.Traffic.Methods["POST"] != 1 {
 		t.Fatalf("Methods = %#v", overview.Traffic.Methods)
 	}
-	if overview.Traffic.P95MS != 50 {
-		t.Fatalf("P95MS = %v, want 50", overview.Traffic.P95MS)
+	if overview.Traffic.P95MS != 30 || overview.Traffic.P95Capped {
+		t.Fatalf("P95 = %v capped=%v, want interpolated 30ms", overview.Traffic.P95MS, overview.Traffic.P95Capped)
 	}
 	if len(overview.Upstreams) != 2 || overview.Upstreams[0].Status != "healthy" || overview.Upstreams[1].Status != "unhealthy" {
 		t.Fatalf("Upstreams = %#v", overview.Upstreams)
@@ -291,8 +292,8 @@ caddy_reverse_proxy_upstreams_healthy{upstream="8.8.8.8:80"} 1
 	if overview.Traffic.TotalRequests != 7 {
 		t.Fatalf("TotalRequests = %d, want business-only 7", overview.Traffic.TotalRequests)
 	}
-	if overview.Traffic.P95MS != 25 {
-		t.Fatalf("P95MS = %v, want business-only 25", overview.Traffic.P95MS)
+	if overview.Traffic.P95MS != 23.75 || overview.Traffic.P95Capped {
+		t.Fatalf("P95 = %v capped=%v, want business-only interpolated 23.75ms", overview.Traffic.P95MS, overview.Traffic.P95Capped)
 	}
 	if len(overview.Upstreams) != 1 || overview.Upstreams[0].Address != "8.8.8.8:80" {
 		t.Fatalf("Upstreams = %#v, want only business upstream", overview.Upstreams)
@@ -416,8 +417,20 @@ func TestObservabilityEventWithinWindowSkipsStaleEvents(t *testing.T) {
 	if !observabilityEventWithinWindow(observabilityLogEvent{Time: "2026-07-11 09:59:59"}, now, 24*time.Hour) {
 		t.Fatalf("recent event should be included")
 	}
-	if !observabilityEventWithinWindow(observabilityLogEvent{}, now, 24*time.Hour) {
-		t.Fatalf("event without timestamp should be included")
+	if observabilityEventWithinWindow(observabilityLogEvent{}, now, 24*time.Hour) {
+		t.Fatalf("event without timestamp should be skipped")
+	}
+}
+
+func TestHistogramQuantileMarksInfiniteBucketAsCapped(t *testing.T) {
+	value, capped := histogramQuantileMS(0.95, map[float64]float64{
+		1:           90,
+		5:           94,
+		math.Inf(1): 100,
+	}, 100)
+
+	if value != 5000 || !capped {
+		t.Fatalf("quantile = %v capped=%v, want >5000ms marker", value, capped)
 	}
 }
 
