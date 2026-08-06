@@ -74,7 +74,15 @@ export default function Table({ data, isFetching, onEdit, onDelete, onDisableTog
 				id: "forwardDomainName",
 				header: intl.formatMessage({ id: "column.destination" }),
 				cell: (info: any) => {
-					return info.getValue();
+					const value = info.getValue();
+					if (!value) return value;
+					const scheme = info.row.original.forwardScheme || "http";
+					return (
+						<DomainsFormatter
+							domains={[value]}
+							linkScheme={scheme.toLowerCase() === "https" ? "https" : "http"}
+						/>
+					);
 				},
 			}),
 			columnHelper.accessor((row: any) => row, {

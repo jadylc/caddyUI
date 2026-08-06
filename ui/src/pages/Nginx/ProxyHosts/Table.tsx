@@ -189,7 +189,16 @@ export default function Table({
 					}
 					return (
 						<div className="d-flex flex-column">
-							<span>{`${first.forwardScheme}://${first.forwardHost}:${first.forwardPort}`}</span>
+							{upstreams.map((upstream, index) => (
+								<a
+									key={index}
+									href={`${upstream.forwardScheme}://${upstream.forwardHost}:${upstream.forwardPort}`}
+									target="_blank"
+									rel="noopener"
+								>
+									{`${upstream.forwardScheme}://${upstream.forwardHost}:${upstream.forwardPort}`}
+								</a>
+							))}
 							{upstreams.length > 1 ? (
 								<span className="text-secondary small">
 									<T
