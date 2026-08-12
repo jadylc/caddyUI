@@ -10,6 +10,7 @@ export * from "./ErrorHandlingFields";
 export * from "./LocationsFields";
 export * from "./ReverseProxyAdvancedPanel";
 export * from "./ResponseOptimizationFields";
+export * from "./RootRedirectFields";
 export * from "./SSLCertificateField";
 export * from "./SSLOptionsFields";
 export * from "./UpstreamsFields";

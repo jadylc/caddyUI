@@ -13,6 +13,8 @@ const fetchProxyHost = (id: number | "new") => {
 			listenPorts: [],
 			forwardHost: "",
 			forwardPort: 0,
+			rootRedirectPath: "",
+			rootRedirectCode: 302,
 			accessListId: 0,
 			certificateId: 0,
 			sslForced: false,

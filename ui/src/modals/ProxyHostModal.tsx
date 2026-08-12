@@ -15,6 +15,7 @@ import {
 	LocationsFields,
 	ReverseProxyAdvancedPanel,
 	ResponseOptimizationFields,
+	RootRedirectFields,
 	SSLOptionsFields,
 	UpstreamsFields,
 	normalizeReverseProxyAdvanced,
@@ -300,6 +301,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 		const payload = {
 			...values,
 			id: id === "new" ? undefined : id,
+			rootRedirectPath: String(values.rootRedirectPath || "").trim(),
+			rootRedirectCode: Number(values.rootRedirectCode || 302),
 			listenPort: listenPorts[0] || 0,
 			listenPorts,
 			forwardScheme: primaryUpstream.forwardScheme,
@@ -367,6 +370,8 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 								}),
 								loadBalancingPolicy:
 									initialData?.loadBalancingPolicy ?? data?.loadBalancingPolicy ?? "",
+								rootRedirectPath: initialData?.rootRedirectPath ?? data?.rootRedirectPath ?? "",
+								rootRedirectCode: initialData?.rootRedirectCode ?? data?.rootRedirectCode ?? 302,
 								accessListId: initialData?.accessListId ?? data?.accessListId ?? 0,
 								upstreamInsecureSkipVerify:
 									initialData?.upstreamInsecureSkipVerify ??
@@ -574,6 +579,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 													</h4>
 													<UpstreamsFields />
 													<AccessField />
+													<RootRedirectFields />
 													<div className="my-3">
 														<h4 className="py-2">
 															<T id="options" />

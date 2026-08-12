@@ -13,6 +13,7 @@ import {
 	ErrorHandlingFields,
 	Loading,
 	ResponseOptimizationFields,
+	RootRedirectFields,
 	SSLOptionsFields,
 	normalizeAccessLog,
 	normalizeErrorHandling,
@@ -123,6 +124,8 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 		const payload = {
 			...values,
 			id: id === "new" ? undefined : id,
+			rootRedirectPath: String(values.rootRedirectPath || "").trim(),
+			rootRedirectCode: Number(values.rootRedirectCode || 302),
 			listenPort: listenPorts[0] || 0,
 			listenPorts,
 			rootPath: String(values.rootPath || "").trim(),
@@ -178,6 +181,8 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 								indexFile: initialData?.indexFile ?? data?.indexFile ?? "/index.html",
 								directoryBrowsing:
 									initialData?.directoryBrowsing ?? data?.directoryBrowsing ?? false,
+								rootRedirectPath: initialData?.rootRedirectPath ?? data?.rootRedirectPath ?? "",
+								rootRedirectCode: initialData?.rootRedirectCode ?? data?.rootRedirectCode ?? 302,
 								accessListId: initialData?.accessListId ?? data?.accessListId ?? 0,
 								certificateId: initialData?.certificateId ?? data?.certificateId ?? 0,
 								sslForced: initialData?.sslForced ?? data?.sslForced ?? false,
@@ -429,6 +434,7 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 															</div>
 														</div>
 													)}
+													<RootRedirectFields />
 												</div>
 												<div className="tab-pane" id="tab-static-access" role="tabpanel">
 													<AccessField />

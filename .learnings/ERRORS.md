@@ -320,3 +320,154 @@ From the backend directory, run `gofmt -w main.go main_test.go`; from the reposi
 - **Notes**: Re-ran gofmt with paths relative to the current working directory.
 
 ---
+
+## [ERR-20260812-001] ui_skills_cli_timeout
+
+**Logged**: 2026-08-12T00:00:00+08:00
+**Priority**: low
+**Status**: pending
+**Area**: frontend
+
+### Summary
+The `ui-skills` CLI did not return category information before the command timeout.
+
+### Error
+```text
+command timed out after 34045 milliseconds
+```
+
+### Context
+- Commands attempted: `npx ui-skills categories` and `npx --no-install ui-skills categories`
+- Working directory: `C:\Users\Admin\projects\my-caddy-ui\ui`
+- Both invocations stalled without producing output.
+
+### Suggested Fix
+Verify the local CLI installation/cache and make category lookup fail fast when the package runner is unavailable.
+
+### Metadata
+- Reproducible: yes
+- Related Files: ui/package.json
+
+---
+
+## [ERR-20260812-002] root_redirect_space_validation
+
+**Logged**: 2026-08-12T09:28:33+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The first root-redirect test run showed that Go's request-URI parser accepted a target containing a raw space.
+
+### Error
+```text
+validateRootRedirectConfig("/bad path") error = nil, want error
+```
+
+### Context
+- Command attempted: `go test ./...`
+- Frontend validation already rejected whitespace, but backend validation relied on `url.ParseRequestURI` alone.
+
+### Suggested Fix
+Reject whitespace explicitly and reject paths whose cleaned form resolves back to `/`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/main.go, backend/main_test.go
+
+### Resolution
+- **Resolved**: 2026-08-12T09:30:00+08:00
+- **Notes**: Added explicit whitespace validation plus cleaned-path loop prevention and matching tests.
+
+---
+
+## [ERR-20260812-003] vitest_setup_absolute_cache_path
+
+**Logged**: 2026-08-12T09:30:18+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Vitest resolved its relative setup file through a stale absolute workspace path on another drive.
+
+### Error
+```text
+Cannot find module '/@fs/D:/projects/my-caddy-ui/ui/vitest-setup.js'
+```
+
+### Context
+- Command attempted: `npm test -- --run`
+- Current workspace: `C:\Users\Admin\projects\my-caddy-ui`
+- `setupFiles: ["./vitest-setup.js"]` was resolved to the prior `D:` checkout.
+- Node reports the real path of the current `node_modules` directory as `D:\projects\my-caddy-ui\ui\node_modules`.
+
+### Suggested Fix
+Reinstall `node_modules` in the current workspace so dependency real paths no longer point to the old `D:` checkout.
+
+### Metadata
+- Reproducible: yes
+- Related Files: ui/vite.config.ts, ui/vitest-setup.js
+
+---
+
+## [ERR-20260812-004] linux_caddy_invoked_as_windows_exe
+
+**Logged**: 2026-08-12T09:33:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The bundled Linux Caddy binary was mistakenly invoked with a Windows `.exe` path during config validation.
+
+### Error
+```text
+The term '.\dist\caddy.exe' is not recognized as a name of a cmdlet, function, script file, or executable program.
+```
+
+### Context
+- Command attempted from Windows PowerShell: `.\dist\caddy.exe validate ...`
+- The repository artifact is `dist/caddy`, built for the container/Linux environment.
+
+### Suggested Fix
+Run the artifact through WSL or the project container, or use a native Windows Caddy binary when validating from PowerShell.
+
+### Metadata
+- Reproducible: yes
+- Related Files: dist/caddy, Dockerfile
+
+### Resolution
+- **Resolved**: 2026-08-12T09:34:00+08:00
+- **Notes**: Switched validation to environment-aware execution instead of assuming a Windows executable.
+
+---
+
+## [ERR-20260812-005] bundled_caddy_architecture_mismatch
+
+**Logged**: 2026-08-12T09:42:00+08:00
+**Priority**: low
+**Status**: pending
+**Area**: tests
+
+### Summary
+The bundled Caddy binary cannot run in the available x86_64 WSL environment because it targets another CPU architecture.
+
+### Error
+```text
+Linux shell attempted to interpret the ELF binary and emitted binary-data command errors.
+```
+
+### Context
+- Command attempted: run `dist/caddy validate` through the `docker-desktop` WSL distribution.
+- WSL reports `x86_64`; the bundled artifact is not executable in that environment.
+
+### Suggested Fix
+Validate in the target image/build architecture or provide a matching x86_64 Caddy artifact for local checks.
+
+### Metadata
+- Reproducible: yes
+- Related Files: dist/caddy, Dockerfile
+
+---

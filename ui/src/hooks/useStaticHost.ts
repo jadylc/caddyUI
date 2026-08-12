@@ -16,6 +16,8 @@ const fetchStaticHost = (id: number | "new") => {
 			mode: "static",
 			indexFile: "/index.html",
 			directoryBrowsing: false,
+			rootRedirectPath: "",
+			rootRedirectCode: 302,
 			accessListId: 0,
 			certificateId: 0,
 			sslForced: false,

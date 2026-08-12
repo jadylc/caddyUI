@@ -698,6 +698,42 @@
   "host.listen-port.help-ssl": {
     "defaultMessage": "启用 SSL 时留空使用默认 443；多个端口用英文逗号分隔，例如 443,11111。"
   },
+  "host.root-redirect.title": {
+    "defaultMessage": "首页跳转"
+  },
+  "host.root-redirect.target": {
+    "defaultMessage": "目标路径"
+  },
+  "host.root-redirect.help": {
+    "defaultMessage": "仅访问域名根路径 / 时跳转；留空则关闭。/d 及其他路径仍按当前站点处理。"
+  },
+  "host.root-redirect.status-code": {
+    "defaultMessage": "状态码"
+  },
+  "host.root-redirect.status.301": {
+    "defaultMessage": "301 永久跳转"
+  },
+  "host.root-redirect.status.302": {
+    "defaultMessage": "302 临时跳转"
+  },
+  "host.root-redirect.status.307": {
+    "defaultMessage": "307 保留请求方法"
+  },
+  "host.root-redirect.status.308": {
+    "defaultMessage": "308 永久且保留请求方法"
+  },
+  "host.root-redirect.example": {
+    "defaultMessage": "示例：为 a.b.c 填写 /d 后，a.b.c/ 会跳转到 a.b.c/d，不会重复跳转 /d。"
+  },
+  "host.root-redirect.error.path-prefix": {
+    "defaultMessage": "首页跳转路径必须以单个 / 开头，例如 /d"
+  },
+  "host.root-redirect.error.loop": {
+    "defaultMessage": "首页跳转路径不能是 /，否则会形成重定向循环"
+  },
+  "host.root-redirect.error.invalid": {
+    "defaultMessage": "首页跳转路径包含无效字符"
+  },
   "hosts": {
     "defaultMessage": "主机列表"
   },

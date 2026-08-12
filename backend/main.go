@@ -161,6 +161,8 @@ type Site struct {
 	RedirectURL                string                     `json:"redirect_url,omitempty"`
 	RedirectCode               int                        `json:"redirect_code,omitempty"`
 	PreservePath               bool                       `json:"preserve_path,omitempty"`
+	RootRedirectPath           string                     `json:"root_redirect_path,omitempty"`
+	RootRedirectCode           int                        `json:"root_redirect_code,omitempty"`
 	RootPath                   string                     `json:"root_path,omitempty"`
 	StaticMode                 string                     `json:"static_mode,omitempty"` // static | spa
 	IndexFile                  string                     `json:"index_file,omitempty"`
@@ -2605,6 +2607,7 @@ func writeAccessLogDirective(b *strings.Builder, s Site, indent string) {
 }
 
 func writeSiteRouteContent(b *strings.Builder, s Site, blockInner string) error {
+	writeRootRedirectDirective(b, s, blockInner)
 	switch s.Kind {
 	case "static":
 		return writeStaticSiteRouteContent(b, s, blockInner)
@@ -3153,6 +3156,33 @@ func normalizeProxyUpstream(upstream ProxyUpstream) ProxyUpstream {
 	}
 }
 
+func writeRootRedirectDirective(b *strings.Builder, s Site, indent string) {
+	switch strings.TrimSpace(s.Kind) {
+	case "", "proxy", "static":
+	default:
+		return
+	}
+	target := strings.TrimSpace(s.RootRedirectPath)
+	if target == "" {
+		return
+	}
+	code := s.RootRedirectCode
+	if code == 0 {
+		code = http.StatusFound
+	}
+	matcher := rootRedirectMatcherName(s)
+	fmt.Fprintf(b, "%s%s path /\n", indent, matcher)
+	fmt.Fprintf(b, "%sredir %s %s %d\n", indent, matcher, caddyQuote(target), code)
+}
+
+func rootRedirectMatcherName(s Site) string {
+	seed := strings.TrimSpace(s.Name)
+	if seed == "" {
+		seed = strings.TrimSpace(s.Domain) + ":" + strings.TrimSpace(s.RootRedirectPath)
+	}
+	return fmt.Sprintf("@root_path_%d", stableID(seed))
+}
+
 func proxyUpstreamArgs(upstreams []ProxyUpstream) []string {
 	out := make([]string, 0, len(upstreams))
 	for _, upstream := range upstreams {
@@ -3633,6 +3663,7 @@ func normalizeSiteProxyConfig(s *Site) {
 	s.Response = normalizeResponseOptimizationConfig(s.Response)
 	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
 	s.ErrorHandling = normalizeErrorHandlingConfig(s.ErrorHandling)
+	normalizeRootRedirectConfig(s)
 	s.ReverseProxy = normalizeReverseProxyAdvancedConfig(s.ReverseProxy)
 	s.Upstreams = normalizeProxyUpstreams(s.Upstreams, s.Backend)
 	if len(s.Upstreams) > 0 {
@@ -3676,6 +3707,7 @@ func normalizeSiteStaticConfig(s *Site) {
 	s.Response = normalizeResponseOptimizationConfig(s.Response)
 	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
 	s.ErrorHandling = normalizeErrorHandlingConfig(s.ErrorHandling)
+	normalizeRootRedirectConfig(s)
 	if mode != "static" {
 		s.DirectoryBrowsing = false
 	}
@@ -3686,6 +3718,46 @@ func normalizeSiteStaticConfig(s *Site) {
 	s.ReverseProxy = ReverseProxyAdvancedConfig{}
 	s.UpstreamInsecureSkipVerify = false
 	s.ForwardAuth = ForwardAuthConfig{}
+}
+
+func normalizeRootRedirectConfig(s *Site) {
+	if s == nil {
+		return
+	}
+	s.RootRedirectPath = strings.TrimSpace(s.RootRedirectPath)
+	if s.RootRedirectPath == "" {
+		s.RootRedirectCode = 0
+		return
+	}
+	if s.RootRedirectCode == 0 {
+		s.RootRedirectCode = http.StatusFound
+	}
+}
+
+func validateRootRedirectConfig(s Site) error {
+	target := strings.TrimSpace(s.RootRedirectPath)
+	if target == "" {
+		return nil
+	}
+	if hasControlChars(target) || strings.ContainsAny(target, " \t\r\n{}\\") {
+		return errors.New("首页跳转路径包含无效字符")
+	}
+	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") {
+		return errors.New("首页跳转路径必须以单个 / 开头，例如 /d")
+	}
+	parsed, err := url.ParseRequestURI(target)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" {
+		return errors.New("首页跳转路径无效，例如应填写 /d")
+	}
+	if path.Clean(parsed.Path) == "/" {
+		return errors.New("首页跳转路径不能是 /，否则会形成重定向循环")
+	}
+	switch s.RootRedirectCode {
+	case 0, http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return nil
+	default:
+		return errors.New("首页跳转状态码必须为 301、302、307 或 308")
+	}
 }
 
 func validateHTTPOnlyListenPorts(s Site) error {
@@ -3705,6 +3777,9 @@ func validateSiteProxyConfig(s Site) error {
 		return errors.New("后端地址不能为空")
 	}
 	if err := validateHTTPOnlyListenPorts(s); err != nil {
+		return err
+	}
+	if err := validateRootRedirectConfig(s); err != nil {
 		return err
 	}
 	if err := validateResponseOptimizationConfig(s.Response, "响应优化"); err != nil {
@@ -3749,6 +3824,9 @@ func validateSiteProxyConfig(s Site) error {
 
 func validateSiteStaticConfig(s Site) error {
 	if err := validateHTTPOnlyListenPorts(s); err != nil {
+		return err
+	}
+	if err := validateRootRedirectConfig(s); err != nil {
 		return err
 	}
 	if err := validateResponseOptimizationConfig(s.Response, "响应优化"); err != nil {
@@ -6314,6 +6392,8 @@ type npmProxyHost struct {
 	Upstreams                  []npmProxyUpstream         `json:"upstreams,omitempty"`
 	LoadBalancingPolicy        string                     `json:"load_balancing_policy,omitempty"`
 	Locations                  []npmProxyLocation         `json:"locations,omitempty"`
+	RootRedirectPath           string                     `json:"root_redirect_path,omitempty"`
+	RootRedirectCode           int                        `json:"root_redirect_code,omitempty"`
 	AccessListID               int                        `json:"access_list_id"`
 	CertificateID              any                        `json:"certificate_id"`
 	SSLForced                  bool                       `json:"ssl_forced"`
@@ -6348,6 +6428,8 @@ type npmStaticHost struct {
 	Mode              string                     `json:"mode"`
 	IndexFile         string                     `json:"index_file,omitempty"`
 	DirectoryBrowsing bool                       `json:"directory_browsing"`
+	RootRedirectPath  string                     `json:"root_redirect_path,omitempty"`
+	RootRedirectCode  int                        `json:"root_redirect_code,omitempty"`
 	AccessListID      int                        `json:"access_list_id"`
 	CertificateID     any                        `json:"certificate_id"`
 	SSLForced         bool                       `json:"ssl_forced"`
@@ -8928,6 +9010,8 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		Upstreams:                  upstreams,
 		LoadBalancingPolicy:        s.LoadBalancingPolicy,
 		Locations:                  locations,
+		RootRedirectPath:           s.RootRedirectPath,
+		RootRedirectCode:           s.RootRedirectCode,
 		AccessListID:               s.AccessListID,
 		CertificateID:              certID,
 		SSLForced:                  !s.NoTLS,
@@ -9114,6 +9198,8 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		Upstreams:                  mainUpstreams,
 		LoadBalancingPolicy:        strings.TrimSpace(p.LoadBalancingPolicy),
 		Locations:                  locations,
+		RootRedirectPath:           strings.TrimSpace(p.RootRedirectPath),
+		RootRedirectCode:           p.RootRedirectCode,
 		AccessListID:               p.AccessListID,
 		Wildcard:                   wildcard,
 		NoTLS:                      !p.SSLForced,
@@ -9287,6 +9373,8 @@ func siteToNPMStaticHost(s Site, certByDomain map[string]npmCertificate) npmStat
 		Mode:              mode,
 		IndexFile:         normalizeStaticIndexFile(mode, s.IndexFile),
 		DirectoryBrowsing: mode == "static" && s.DirectoryBrowsing,
+		RootRedirectPath:  s.RootRedirectPath,
+		RootRedirectCode:  s.RootRedirectCode,
 		AccessListID:      s.AccessListID,
 		CertificateID:     certID,
 		SSLForced:         !s.NoTLS,
@@ -9332,6 +9420,8 @@ func npmStaticHostToSite(item npmStaticHost, existingName string) (Site, error) 
 		StaticMode:          mode,
 		IndexFile:           normalizeStaticIndexFile(mode, item.IndexFile),
 		DirectoryBrowsing:   mode == "static" && item.DirectoryBrowsing,
+		RootRedirectPath:    strings.TrimSpace(item.RootRedirectPath),
+		RootRedirectCode:    item.RootRedirectCode,
 		AccessListID:        item.AccessListID,
 		NoTLS:               !item.SSLForced,
 		Wildcard:            wildcard,

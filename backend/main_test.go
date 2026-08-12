@@ -2045,6 +2045,129 @@ func TestNPMProxyHostToSitePersistsServiceName(t *testing.T) {
 	}
 }
 
+func TestProxyHostRoundTripsRootRedirect(t *testing.T) {
+	host := npmProxyHost{
+		DomainNames:      []string{"a.b.c"},
+		ForwardScheme:    "http",
+		ForwardHost:      "127.0.0.1",
+		ForwardPort:      8080,
+		RootRedirectPath: "/d",
+		RootRedirectCode: http.StatusFound,
+		Enabled:          true,
+		Meta:             map[string]any{},
+	}
+
+	site, err := npmProxyHostToSite(host, "app")
+	if err != nil {
+		t.Fatalf("npmProxyHostToSite error = %v", err)
+	}
+	if site.RootRedirectPath != "/d" || site.RootRedirectCode != http.StatusFound {
+		t.Fatalf("site root redirect = %q/%d, want /d/302", site.RootRedirectPath, site.RootRedirectCode)
+	}
+	out := siteToNPMProxyHost(site, nil)
+	if out.RootRedirectPath != "/d" || out.RootRedirectCode != http.StatusFound {
+		t.Fatalf("round-trip root redirect = %q/%d, want /d/302", out.RootRedirectPath, out.RootRedirectCode)
+	}
+}
+
+func TestRenderProxySiteRedirectsOnlyRootPath(t *testing.T) {
+	site := Site{
+		Name:             "app",
+		Kind:             "proxy",
+		Domain:           "a.b.c",
+		Backend:          "http://127.0.0.1:8080",
+		RootRedirectPath: "/d",
+		RootRedirectCode: http.StatusFound,
+		NoTLS:            true,
+	}
+	conf, err := renderSite(site, nil)
+	if err != nil {
+		t.Fatalf("renderSite error = %v", err)
+	}
+	matcher := rootRedirectMatcherName(site)
+	for _, want := range []string{
+		matcher + " path /",
+		`redir ` + matcher + ` "/d" 302`,
+		"reverse_proxy http://127.0.0.1:8080",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+	if strings.Contains(conf, "path /d") {
+		t.Fatalf("renderSite = %q, should not redirect /d again", conf)
+	}
+}
+
+func TestRenderNonContentSiteIgnoresRootRedirect(t *testing.T) {
+	tests := []struct {
+		name string
+		site Site
+		want string
+	}{
+		{
+			name: "redirection",
+			site: Site{
+				Name:             "redirect",
+				Kind:             "redirection",
+				Domain:           "redirect.example.com",
+				RedirectURL:      "https://target.example.com",
+				RedirectCode:     http.StatusMovedPermanently,
+				RootRedirectPath: "/d",
+				RootRedirectCode: http.StatusFound,
+			},
+			want: "redir https://target.example.com 301",
+		},
+		{
+			name: "dead",
+			site: Site{
+				Name:             "dead",
+				Kind:             "dead",
+				Domain:           "dead.example.com",
+				RootRedirectPath: "/d",
+				RootRedirectCode: http.StatusFound,
+			},
+			want: "respond 404",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf, err := renderSite(tt.site, nil)
+			if err != nil {
+				t.Fatalf("renderSite error = %v", err)
+			}
+			if !strings.Contains(conf, tt.want) {
+				t.Fatalf("renderSite = %q, want %q", conf, tt.want)
+			}
+			if strings.Contains(conf, "root_path_") || strings.Contains(conf, `"/d"`) {
+				t.Fatalf("renderSite = %q, should ignore root redirect for %s sites", conf, tt.name)
+			}
+		})
+	}
+}
+
+func TestRootRedirectMatcherIsUniquePerSite(t *testing.T) {
+	a := rootRedirectMatcherName(Site{Name: "a", Domain: "a.domain.com", RootRedirectPath: "/d"})
+	b := rootRedirectMatcherName(Site{Name: "b", Domain: "b.domain.com", RootRedirectPath: "/d"})
+	if a == b {
+		t.Fatalf("root redirect matcher = %q for both sites, want unique names", a)
+	}
+}
+
+func TestValidateRootRedirectRejectsLoopAndExternalTarget(t *testing.T) {
+	for _, target := range []string{"/", "/d/..", "https://example.com/d", "//example.com/d", "/bad path"} {
+		t.Run(target, func(t *testing.T) {
+			if err := validateRootRedirectConfig(Site{RootRedirectPath: target, RootRedirectCode: http.StatusFound}); err == nil {
+				t.Fatalf("validateRootRedirectConfig(%q) error = nil, want error", target)
+			}
+		})
+	}
+	if err := validateRootRedirectConfig(Site{RootRedirectPath: "/d", RootRedirectCode: http.StatusFound}); err != nil {
+		t.Fatalf("validateRootRedirectConfig(/d) error = %v", err)
+	}
+}
+
 func TestNPMProxyHostToSitePersistsDisabledState(t *testing.T) {
 	host := npmProxyHost{
 		DomainNames:   []string{"disabled.example.com"},
@@ -3784,6 +3907,8 @@ func TestNPMStaticHostRoundTripsSiteConfig(t *testing.T) {
 		RootPath:          "/srv/sites/docs",
 		Mode:              "spa",
 		DirectoryBrowsing: true,
+		RootRedirectPath:  "/docs",
+		RootRedirectCode:  http.StatusTemporaryRedirect,
 		AccessListID:      123,
 		SSLForced:         false,
 		Enabled:           true,
@@ -3809,6 +3934,9 @@ func TestNPMStaticHostRoundTripsSiteConfig(t *testing.T) {
 	if site.StaticMode != "spa" || site.IndexFile != "/index.html" || site.DirectoryBrowsing {
 		t.Fatalf("site static config = mode %q index %q browse %v", site.StaticMode, site.IndexFile, site.DirectoryBrowsing)
 	}
+	if site.RootRedirectPath != "/docs" || site.RootRedirectCode != http.StatusTemporaryRedirect {
+		t.Fatalf("site root redirect = %q/%d, want /docs/307", site.RootRedirectPath, site.RootRedirectCode)
+	}
 	if site.AccessListID != 123 || !site.NoTLS || site.Disabled {
 		t.Fatalf("site access/tls/enabled = access %d noTLS %v disabled %v", site.AccessListID, site.NoTLS, site.Disabled)
 	}
@@ -3825,6 +3953,9 @@ func TestNPMStaticHostRoundTripsSiteConfig(t *testing.T) {
 	}
 	if out.ListenPort != 8080 || len(out.ListenPorts) != 2 || out.ListenPorts[1] != 8081 {
 		t.Fatalf("out listen = %d %#v, want 8080 [8080 8081]", out.ListenPort, out.ListenPorts)
+	}
+	if out.RootRedirectPath != "/docs" || out.RootRedirectCode != http.StatusTemporaryRedirect {
+		t.Fatalf("out root redirect = %q/%d, want /docs/307", out.RootRedirectPath, out.RootRedirectCode)
 	}
 	if !out.Response.CompressionEnabled || out.Response.CacheControlValue != "public, max-age=3600" {
 		t.Fatalf("out response = %#v", out.Response)

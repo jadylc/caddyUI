@@ -379,6 +379,8 @@ export interface ProxyHost {
 	http2Support: boolean;
 	enabled: boolean;
 	locations?: ProxyLocation[];
+	rootRedirectPath?: string;
+	rootRedirectCode?: number;
 	hstsEnabled: boolean;
 	hstsSubdomains: boolean;
 	trustForwardedProto: boolean;
@@ -407,6 +409,8 @@ export interface StaticHost {
 	mode: "static" | "spa";
 	indexFile?: string;
 	directoryBrowsing: boolean;
+	rootRedirectPath?: string;
+	rootRedirectCode?: number;
 	accessListId: number;
 	certificateId: number;
 	sslForced: boolean;
