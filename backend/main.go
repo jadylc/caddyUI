@@ -79,6 +79,7 @@ var (
 	aliyunDNSAPIBaseURL       = "https://alidns.aliyuncs.com/"
 	cloudflareAPIBaseURL      = "https://api.cloudflare.com/client/v4"
 	dnspodAPIBaseURL          = "https://dnsapi.cn"
+	heDDNSUpdateURL           = "https://dyn.dns.he.net/nic/update"
 	confSuffix                = ".conf"
 	metaSuffix                = ".json"
 	probeTimeout              = 2 * time.Second
@@ -10795,8 +10796,11 @@ func dynamicDNSHostnames(value string) []string {
 	}
 	if len(fields) == 1 {
 		host, wildcard := normalizeDynamicDNSHost(fields[0])
-		if host == "" || wildcard {
+		if host == "" {
 			return nil
+		}
+		if wildcard {
+			return []string{"*." + host}
 		}
 		return []string{host}
 	}
@@ -10806,12 +10810,18 @@ func dynamicDNSHostnames(value string) []string {
 	}
 	out := []string{}
 	for _, record := range fields[1:] {
-		record = strings.Trim(strings.TrimSpace(record), ".")
-		if record == "" || record == "@" {
-			out = append(out, zone)
+		wildcard := strings.HasPrefix(strings.TrimSpace(record), "*")
+		record = strings.Trim(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(record), "*")), ".")
+		if record == "" {
+			if wildcard {
+				out = append(out, "*."+zone)
+			} else {
+				out = append(out, zone)
+			}
 			continue
 		}
-		if strings.HasPrefix(record, "*") {
+		if record == "@" {
+			out = append(out, zone)
 			continue
 		}
 		record = normalizedDomainMonitorHost(record)
@@ -10819,10 +10829,18 @@ func dynamicDNSHostnames(value string) []string {
 			continue
 		}
 		if record == zone || strings.HasSuffix(record, "."+zone) {
-			out = append(out, record)
+			if wildcard {
+				out = append(out, "*."+record)
+			} else {
+				out = append(out, record)
+			}
 			continue
 		}
-		out = append(out, record+"."+zone)
+		if wildcard {
+			out = append(out, "*."+record+"."+zone)
+		} else {
+			out = append(out, record+"."+zone)
+		}
 	}
 	return uniqueSortedStrings(out)
 }
@@ -14732,6 +14750,19 @@ func checkDynamicDNSItemStatus(item npmDynamicDNS, creds []Credential, publicIPC
 				}
 				continue
 			}
+			if cred.Provider == "he" {
+				remoteIPs, err := syncHEDynamicDNSRecord(host, cred, publicIPs, item.Resolvers, wantIPv4, wantIPv6)
+				if err != nil {
+					missingMessages = append(missingMessages, fmt.Sprintf("%s Hurricane Electric 记录更新失败: %v", host, err))
+					continue
+				}
+				resolvedAll = append(resolvedAll, remoteIPs...)
+				if len(remoteIPs) == 0 {
+					missingMessages = append(missingMessages, fmt.Sprintf("%s Hurricane Electric 没有匹配的 A/AAAA 记录", host))
+					continue
+				}
+				continue
+			}
 			remoteIPs, err := resolveDomainIPsByVersion(host, item.Resolvers, wantIPv4, wantIPv6)
 			if err != nil {
 				missingMessages = append(missingMessages, fmt.Sprintf("%s 解析失败: %v", host, err))
@@ -14777,6 +14808,113 @@ func syncCloudflareDynamicDNSRecord(host string, cred Credential, publicIPs []st
 		remoteIPs = replaceIPValue(remoteIPs, record.Content, desired)
 	}
 	return uniqueSortedStrings(remoteIPs), nil
+}
+
+// syncHEDynamicDNSRecord 主动同步 Hurricane Electric 的动态 DNS 记录。
+// HE 没有 DNS 记录查询 API（libdns/he 同样通过 DNS 解析读取当前值），
+// 因此先解析域名当前 A/AAAA 记录，与公网 IP 不一致时通过
+// https://dyn.dns.he.net/nic/update 推送更新。解析失败时仍尝试推送，
+// 由 HE 端在记录值一致时返回 nochg 兜底。
+func syncHEDynamicDNSRecord(host string, cred Credential, publicIPs []string, resolvers []string, wantIPv4 bool, wantIPv6 bool) ([]string, error) {
+	if strings.TrimSpace(cred.HEAPIKey) == "" {
+		return nil, errors.New("Hurricane Electric API Key 为空")
+	}
+	remoteIPs, err := resolveDomainIPsByVersion(host, resolvers, wantIPv4, wantIPv6)
+	if err != nil {
+		remoteIPs = nil
+	}
+	if stringSetsEqual(remoteIPs, publicIPs) {
+		return remoteIPs, nil
+	}
+	for _, desired := range publicIPs {
+		ip := net.ParseIP(desired)
+		if ip == nil {
+			continue
+		}
+		if ip.To4() == nil && !wantIPv6 {
+			continue
+		}
+		if ip.To4() != nil && !wantIPv4 {
+			continue
+		}
+		if stringContainsIPValue(remoteIPs, desired) {
+			continue
+		}
+		if err := updateHEDynamicDNSRecord(host, cred, desired); err != nil {
+			return remoteIPs, err
+		}
+		remoteIPs = uniqueSortedStrings(append(remoteIPs, desired))
+	}
+	return uniqueSortedStrings(remoteIPs), nil
+}
+
+func updateHEDynamicDNSRecord(host string, cred Credential, ip string) error {
+	params := url.Values{}
+	params.Set("hostname", strings.Trim(strings.TrimSpace(host), "."))
+	params.Set("password", strings.TrimSpace(cred.HEAPIKey))
+	params.Set("myip", strings.TrimSpace(ip))
+	req, err := http.NewRequest(http.MethodPost, heDDNSUpdateURL, strings.NewReader(params.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "my-caddy-ui/1.0")
+	client := &http.Client{Timeout: 8 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("Hurricane Electric API 返回 %s: %s", res.Status, strings.TrimSpace(string(data)))
+	}
+	return heDDNSResponseError(strings.TrimSpace(string(data)))
+}
+
+// heDDNSResponseError 把 HE DDNS 接口的纯文本响应码转换为错误，
+// 参考响应码含义：https://dns.he.net/docs.html 与 libdns/he 的实现。
+func heDDNSResponseError(body string) error {
+	code, _, _ := strings.Cut(body, " ")
+	switch code {
+	case "good", "nochg":
+		return nil
+	case "abuse":
+		return errors.New("Hurricane Electric 拒绝更新（abuse）：请确认没有重复提交或滥用接口")
+	case "badagent":
+		return errors.New("Hurricane Electric 拒绝更新（badagent）：请求 User-Agent 无效")
+	case "badauth":
+		return errors.New("Hurricane Electric 认证失败（badauth）：请检查 API Key")
+	case "interval":
+		return errors.New("Hurricane Electric 更新过于频繁（interval），请稍后重试")
+	case "nohost":
+		return errors.New("记录不存在或未启用动态 DNS（nohost），请先在 dns.he.net 对应记录上启用 DDNS")
+	case "notfqdn":
+		return errors.New("域名不是有效的 FQDN（notfqdn）")
+	case "notxt":
+		return errors.New("没有可更新的动态 TXT 记录（notxt）")
+	default:
+		return fmt.Errorf("Hurricane Electric 返回未知响应: %s", body)
+	}
+}
+
+func stringContainsIPValue(values []string, target string) bool {
+	targetIP := net.ParseIP(strings.TrimSpace(target))
+	for _, value := range values {
+		if targetIP != nil {
+			if valueIP := net.ParseIP(strings.TrimSpace(value)); valueIP != nil && valueIP.String() == targetIP.String() {
+				return true
+			}
+			continue
+		}
+		if strings.TrimSpace(value) == strings.TrimSpace(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func dynamicDNSRecordContentMatches(current string, desired string) bool {
@@ -15280,14 +15418,16 @@ func cloudflareDNSRecordsForHost(host string, cred Credential) ([]cloudflareDNSR
 	if strings.TrimSpace(cred.CFToken) == "" {
 		return nil, errors.New("Cloudflare API Token 为空")
 	}
-	host = normalizedDomainMonitorHost(host)
-	if host == "" {
+	// 通配符记录的名称必须保留 *. 前缀，仅在逐级查找 Zone 时剥离
+	queryHost := strings.ToLower(strings.Trim(strings.TrimSpace(host), "."))
+	zoneHost := normalizedDomainMonitorHost(host)
+	if zoneHost == "" {
 		return nil, errors.New("域名为空")
 	}
-	labels := strings.Split(host, ".")
+	labels := strings.Split(zoneHost, ".")
 	for i := 0; i <= len(labels)-2; i++ {
 		zone := strings.Join(labels[i:], ".")
-		records, err := cloudflareListDNSRecords(zone, host, cred.CFToken)
+		records, err := cloudflareListDNSRecords(zone, queryHost, cred.CFToken)
 		if err != nil {
 			if errors.Is(err, errCloudflareZoneNotFound) {
 				continue
@@ -15296,7 +15436,7 @@ func cloudflareDNSRecordsForHost(host string, cred Credential) ([]cloudflareDNSR
 		}
 		return records, nil
 	}
-	return nil, fmt.Errorf("Cloudflare 未找到 %s 所属 Zone", host)
+	return nil, fmt.Errorf("Cloudflare 未找到 %s 所属 Zone", zoneHost)
 }
 
 var errCloudflareZoneNotFound = errors.New("cloudflare zone not found")
@@ -15338,7 +15478,7 @@ func cloudflareListDNSRecords(zone string, host string, token string) ([]cloudfl
 		}
 		for _, record := range records.Result {
 			record.ZoneID = zoneID
-			record.Name = normalizedDomainMonitorHost(record.Name)
+			record.Name = strings.ToLower(strings.Trim(strings.TrimSpace(record.Name), "."))
 			out = append(out, record)
 		}
 	}

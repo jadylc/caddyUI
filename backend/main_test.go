@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math"
 	"math/big"
 	"net"
@@ -4719,16 +4720,17 @@ func TestDynamicDNSCaddyDomainLineSplitsFQDN(t *testing.T) {
 	}
 }
 
-func TestDynamicDNSHostnamesSkipWildcardRecords(t *testing.T) {
+func TestDynamicDNSHostnamesIncludesWildcardRecords(t *testing.T) {
 	cases := []struct {
 		input string
 		want  []string
 	}{
 		{input: "alist.example.com", want: []string{"alist.example.com"}},
-		{input: "*.example.com", want: nil},
-		{input: "*.home.example.com", want: nil},
-		{input: "example.com *", want: nil},
+		{input: "*.example.com", want: []string{"*.example.com"}},
+		{input: "*.home.example.com", want: []string{"*.home.example.com"}},
+		{input: "example.com *", want: []string{"*.example.com"}},
 		{input: "example.com alist", want: []string{"alist.example.com"}},
+		{input: "example.com * alist", want: []string{"*.example.com", "alist.example.com"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
@@ -5119,17 +5121,128 @@ func TestCheckDynamicDNSItemStatusUpdatesAliyunWildcardRecord(t *testing.T) {
 	}
 }
 
+func TestCheckDynamicDNSItemStatusUpdatesHurricaneElectricRecord(t *testing.T) {
+	oldHEUpdateURL := heDDNSUpdateURL
+	t.Cleanup(func() {
+		heDDNSUpdateURL = oldHEUpdateURL
+	})
+
+	ipServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("203.0.113.50"))
+	}))
+	defer ipServer.Close()
+
+	updateCalled := false
+	heServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm error = %v", err)
+		}
+		if r.Form.Get("hostname") != "alist.example.com" {
+			t.Fatalf("hostname = %q, want alist.example.com", r.Form.Get("hostname"))
+		}
+		if r.Form.Get("password") != "he-key" {
+			t.Fatalf("password = %q, want he-key", r.Form.Get("password"))
+		}
+		if r.Form.Get("myip") != "203.0.113.50" {
+			t.Fatalf("myip = %q, want 203.0.113.50", r.Form.Get("myip"))
+		}
+		updateCalled = true
+		_, _ = w.Write([]byte("good 203.0.113.50"))
+	}))
+	defer heServer.Close()
+	heDDNSUpdateURL = heServer.URL
+
+	resolverAddr, closeResolver := startTestDNSServer(t, map[string]string{"alist.example.com.": "198.51.100.20"})
+	defer closeResolver()
+
+	errText, meta := checkDynamicDNSItemStatus(npmDynamicDNS{
+		Name:          "alist",
+		DomainNames:   []string{"alist.example.com"},
+		CredentialID:  "cred-he",
+		IPv4:          true,
+		CheckInterval: "5m",
+		Resolvers:     []string{resolverAddr},
+		IPServiceURL:  ipServer.URL,
+		Enabled:       true,
+	}, []Credential{{ID: "cred-he", Provider: "he", HEAPIKey: "he-key"}}, map[string][]string{})
+	if errText != "" {
+		t.Fatalf("checkDynamicDNSItemStatus error = %q", errText)
+	}
+	if !updateCalled {
+		t.Fatalf("Hurricane Electric update was not called")
+	}
+	if got := meta["resolved_ips"]; strings.Join(got.([]string), ",") != "198.51.100.20,203.0.113.50" {
+		t.Fatalf("resolved_ips = %#v, want resolved and updated IPs", got)
+	}
+}
+
+func TestCheckDynamicDNSItemStatusUpdatesHurricaneElectricWildcardRecord(t *testing.T) {
+	oldHEUpdateURL := heDDNSUpdateURL
+	t.Cleanup(func() {
+		heDDNSUpdateURL = oldHEUpdateURL
+	})
+
+	ipServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("203.0.113.50"))
+	}))
+	defer ipServer.Close()
+
+	updateCalled := false
+	heServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm error = %v", err)
+		}
+		if r.Form.Get("hostname") != "*.example.com" {
+			t.Fatalf("hostname = %q, want *.example.com", r.Form.Get("hostname"))
+		}
+		if r.Form.Get("myip") != "203.0.113.50" {
+			t.Fatalf("myip = %q, want 203.0.113.50", r.Form.Get("myip"))
+		}
+		updateCalled = true
+		_, _ = w.Write([]byte("nochg 203.0.113.50"))
+	}))
+	defer heServer.Close()
+	heDDNSUpdateURL = heServer.URL
+
+	resolverAddr, closeResolver := startTestDNSServer(t, map[string]string{"*.example.com.": "198.51.100.20"})
+	defer closeResolver()
+
+	errText, meta := checkDynamicDNSItemStatus(npmDynamicDNS{
+		Name:          "wildcard",
+		DomainNames:   []string{"*.example.com"},
+		CredentialID:  "cred-he",
+		IPv4:          true,
+		CheckInterval: "5m",
+		Resolvers:     []string{resolverAddr},
+		IPServiceURL:  ipServer.URL,
+		Enabled:       true,
+	}, []Credential{{ID: "cred-he", Provider: "he", HEAPIKey: "he-key"}}, map[string][]string{})
+	if errText != "" {
+		t.Fatalf("checkDynamicDNSItemStatus error = %q", errText)
+	}
+	if !updateCalled {
+		t.Fatalf("Hurricane Electric wildcard update was not called")
+	}
+	if got := meta["resolved_ips"]; strings.Join(got.([]string), ",") != "203.0.113.50" {
+		t.Fatalf("resolved_ips = %#v, want updated source IP", got)
+	}
+}
 func TestRefreshDynamicDNSStatusesReportsRemoteARecordMismatch(t *testing.T) {
 	tmp := t.TempDir()
 	withTempPaths(t, tmp)
 	oldDynamicDNSPath := dynamicDNSPath
 	oldIPv4Endpoint := publicIPv4Endpoint
 	oldIPv6Endpoint := publicIPv6Endpoint
+	oldHEUpdateURL := heDDNSUpdateURL
 	dynamicDNSPath = filepath.Join(tmp, "dynamic-dns.json")
 	t.Cleanup(func() {
 		dynamicDNSPath = oldDynamicDNSPath
 		publicIPv4Endpoint = oldIPv4Endpoint
 		publicIPv6Endpoint = oldIPv6Endpoint
+		heDDNSUpdateURL = oldHEUpdateURL
 	})
 
 	ipServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -5138,6 +5251,26 @@ func TestRefreshDynamicDNSStatusesReportsRemoteARecordMismatch(t *testing.T) {
 	defer ipServer.Close()
 	publicIPv4Endpoint = ipServer.URL
 	publicIPv6Endpoint = ipServer.URL
+
+	updateCalled := false
+	heServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm error = %v", err)
+		}
+		if r.Form.Get("hostname") != "alist.example.com" {
+			t.Fatalf("hostname = %q, want alist.example.com", r.Form.Get("hostname"))
+		}
+		if r.Form.Get("password") != "he-key" {
+			t.Fatalf("password = %q, want he-key", r.Form.Get("password"))
+		}
+		if r.Form.Get("myip") != "203.0.113.10" {
+			t.Fatalf("myip = %q, want 203.0.113.10", r.Form.Get("myip"))
+		}
+		updateCalled = true
+		_, _ = w.Write([]byte("good 203.0.113.10"))
+	}))
+	defer heServer.Close()
+	heDDNSUpdateURL = heServer.URL
 
 	resolverAddr, closeResolver := startTestDNSServer(t, map[string]string{"alist.example.com.": "198.51.100.20"})
 	defer closeResolver()
@@ -5164,13 +5297,30 @@ func TestRefreshDynamicDNSStatusesReportsRemoteARecordMismatch(t *testing.T) {
 		t.Fatalf("refreshDynamicDNSStatuses error = %v", err)
 	}
 
+	if !updateCalled {
+		t.Fatalf("Hurricane Electric update was not called")
+	}
+
 	var got []npmDynamicDNS
 	if err := loadJSONFile(dynamicDNSPath, &got); err != nil {
 		t.Fatalf("loadJSONFile error = %v", err)
 	}
 	lastErr := metaString(got[0].Meta, "last_error", "lastError")
-	if !strings.Contains(lastErr, "远端记录为 198.51.100.20") || !strings.Contains(lastErr, "当前公网 IP 为 203.0.113.10") {
-		t.Fatalf("last_error = %q, want remote/current IP mismatch", lastErr)
+	if lastErr != "" {
+		t.Fatalf("last_error = %q, want empty after successful update", lastErr)
+	}
+	resolvedAny, ok := got[0].Meta["resolved_ips"].([]string)
+	if !ok {
+		if raw, ok2 := got[0].Meta["resolved_ips"].([]any); ok2 {
+			parts := make([]string, 0, len(raw))
+			for _, v := range raw {
+				parts = append(parts, fmt.Sprint(v))
+			}
+			resolvedAny = parts
+		}
+	}
+	if strings.Join(resolvedAny, ",") != "198.51.100.20,203.0.113.10" {
+		t.Fatalf("resolved_ips = %#v, want resolved and updated IPs", got[0].Meta["resolved_ips"])
 	}
 }
 
@@ -5336,6 +5486,80 @@ func TestCheckDynamicDNSItemStatusUpdatesCloudflareProxiedRecord(t *testing.T) {
 	}
 	if !patchCalled {
 		t.Fatalf("Cloudflare PATCH was not called")
+	}
+	if got := meta["resolved_ips"]; strings.Join(got.([]string), ",") != "203.0.113.50" {
+		t.Fatalf("resolved_ips = %#v, want updated source IP", got)
+	}
+}
+
+func TestCheckDynamicDNSItemStatusUpdatesCloudflareWildcardRecord(t *testing.T) {
+	oldCloudflareAPIBaseURL := cloudflareAPIBaseURL
+	t.Cleanup(func() {
+		cloudflareAPIBaseURL = oldCloudflareAPIBaseURL
+	})
+
+	ipServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("203.0.113.50"))
+	}))
+	defer ipServer.Close()
+
+	patchCalled := false
+	cfServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer cf-token" {
+			t.Fatalf("Authorization = %q, want Bearer cf-token", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/zones":
+			if r.URL.Query().Get("name") != "example.net" {
+				_, _ = w.Write([]byte(`{"success":true,"result":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"zone-1","name":"example.net"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/zones/zone-1/dns_records" && r.URL.Query().Get("type") == "A":
+			if r.URL.Query().Get("name") != "*.example.net" {
+				t.Fatalf("record name = %q, want *.example.net", r.URL.Query().Get("name"))
+			}
+			_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"record-wild","type":"A","name":"*.example.net","content":"203.0.113.51","ttl":1,"proxied":false}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/zones/zone-1/dns_records" && r.URL.Query().Get("type") == "AAAA":
+			_, _ = w.Write([]byte(`{"success":true,"result":[]}`))
+		case r.Method == http.MethodPatch && r.URL.Path == "/zones/zone-1/dns_records/record-wild":
+			patchCalled = true
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("Decode patch body error = %v", err)
+			}
+			if body["content"] != "203.0.113.50" {
+				t.Fatalf("patch content = %#v, want 203.0.113.50", body["content"])
+			}
+			if body["name"] != "*.example.net" {
+				t.Fatalf("patch name = %#v, want *.example.net", body["name"])
+			}
+			_, _ = w.Write([]byte(`{"success":true,"result":{"id":"record-wild","type":"A","name":"*.example.net","content":"203.0.113.50","ttl":1,"proxied":false}}`))
+		default:
+			t.Fatalf("unexpected Cloudflare API request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer cfServer.Close()
+	cloudflareAPIBaseURL = cfServer.URL
+
+	resolverAddr, closeResolver := startTestDNSServer(t, map[string]string{"*.example.net.": "198.51.100.30"})
+	defer closeResolver()
+
+	errText, meta := checkDynamicDNSItemStatus(npmDynamicDNS{
+		Name:          "wildcard",
+		DomainNames:   []string{"*.example.net"},
+		CredentialID:  "cred-1",
+		IPv4:          true,
+		CheckInterval: "5m",
+		Resolvers:     []string{resolverAddr},
+		IPServiceURL:  ipServer.URL,
+		Enabled:       true,
+	}, []Credential{{ID: "cred-1", Provider: "cloudflare", CFToken: "cf-token"}}, map[string][]string{})
+	if errText != "" {
+		t.Fatalf("checkDynamicDNSItemStatus error = %q", errText)
+	}
+	if !patchCalled {
+		t.Fatalf("Cloudflare PATCH was not called for wildcard record")
 	}
 	if got := meta["resolved_ips"]; strings.Join(got.([]string), ",") != "203.0.113.50" {
 		t.Fatalf("resolved_ips = %#v, want updated source IP", got)
