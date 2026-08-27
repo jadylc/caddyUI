@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -88,6 +89,12 @@ var (
 	domainMonitorAPITimeout   = 8 * time.Second
 	digitalPlatAPIBaseURL     = "https://domain-api.digitalplat.org/api/v1"
 	dnsheAPIBaseURL           = "https://api005.dnshe.com/index.php?m=domain_hub"
+	// ddnsAPITimeout 是后端主动调用 DNS 提供商 API（HE DDNS 等）的超时。
+	// 国内网络访问境外 API 偶发慢连接，8s 偏紧，放宽到 20s，
+	// 重试一次后总耗时仍在刷新循环可接受范围内。
+	ddnsAPITimeout = 20 * time.Second
+	// ddnsAPIMaxRetries 是对瞬时网络错误（超时/连接重置）的重试次数。
+	ddnsAPIMaxRetries = 1
 )
 
 var (
@@ -14853,26 +14860,65 @@ func updateHEDynamicDNSRecord(host string, cred Credential, ip string) error {
 	params.Set("hostname", strings.Trim(strings.TrimSpace(host), "."))
 	params.Set("password", strings.TrimSpace(cred.HEAPIKey))
 	params.Set("myip", strings.TrimSpace(ip))
-	req, err := http.NewRequest(http.MethodPost, heDDNSUpdateURL, strings.NewReader(params.Encode()))
-	if err != nil {
-		return err
+	client := &http.Client{Timeout: ddnsAPITimeout}
+	var lastErr error
+	for attempt := 0; attempt <= ddnsAPIMaxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		req, err := http.NewRequest(http.MethodPost, heDDNSUpdateURL, strings.NewReader(params.Encode()))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("User-Agent", "my-caddy-ui/1.0")
+		res, err := client.Do(req)
+		if err != nil {
+			// 超时/连接被重置等瞬时网络错误重试一次，其余直接返回。
+			lastErr = err
+			if isTransientNetworkError(err) && attempt < ddnsAPIMaxRetries {
+				continue
+			}
+			return err
+		}
+		data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		if err != nil {
+			lastErr = err
+			if isTransientNetworkError(err) && attempt < ddnsAPIMaxRetries {
+				continue
+			}
+			return err
+		}
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			return fmt.Errorf("Hurricane Electric API 返回 %s: %s", res.Status, strings.TrimSpace(string(data)))
+		}
+		return heDDNSResponseError(strings.TrimSpace(string(data)))
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "my-caddy-ui/1.0")
-	client := &http.Client{Timeout: 8 * time.Second}
-	res, err := client.Do(req)
-	if err != nil {
-		return err
+	return lastErr
+}
+
+// isTransientNetworkError 判断错误是否为可重试的瞬时网络错误
+// （超时、连接被拒绝/重置、EOF）。
+func isTransientNetworkError(err error) bool {
+	if err == nil {
+		return false
 	}
-	defer res.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	if err != nil {
-		return err
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
 	}
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("Hurricane Electric API 返回 %s: %s", res.Status, strings.TrimSpace(string(data)))
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
 	}
-	return heDDNSResponseError(strings.TrimSpace(string(data)))
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	return false
 }
 
 // heDDNSResponseError 把 HE DDNS 接口的纯文本响应码转换为错误，

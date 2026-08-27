@@ -5230,6 +5230,43 @@ func TestCheckDynamicDNSItemStatusUpdatesHurricaneElectricWildcardRecord(t *test
 		t.Fatalf("resolved_ips = %#v, want updated source IP", got)
 	}
 }
+
+func TestUpdateHEDynamicDNSRecordRetriesTransientError(t *testing.T) {
+	oldHEUpdateURL := heDDNSUpdateURL
+	t.Cleanup(func() {
+		heDDNSUpdateURL = oldHEUpdateURL
+	})
+
+	calls := 0
+	heServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			// 第一次请求挂起直到客户端超时放弃连接。
+			time.Sleep(2 * time.Second)
+			return
+		}
+		_, _ = w.Write([]byte("good 203.0.113.50"))
+	}))
+	defer heServer.Close()
+	heDDNSUpdateURL = heServer.URL
+
+	// 缩短超时，避免测试等待真实的 ddnsAPITimeout。
+	oldTimeout := ddnsAPITimeout
+	ddnsAPITimeout = 500 * time.Millisecond
+	t.Cleanup(func() { ddnsAPITimeout = oldTimeout })
+
+	start := time.Now()
+	err := updateHEDynamicDNSRecord("alist.example.com", Credential{HEAPIKey: "he-key"}, "203.0.113.50")
+	if err != nil {
+		t.Fatalf("updateHEDynamicDNSRecord error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2 (timeout then retry)", calls)
+	}
+	if elapsed := time.Since(start); elapsed < 500*time.Millisecond {
+		t.Fatalf("elapsed = %v, want at least one timed-out attempt", elapsed)
+	}
+}
 func TestRefreshDynamicDNSStatusesReportsRemoteARecordMismatch(t *testing.T) {
 	tmp := t.TempDir()
 	withTempPaths(t, tmp)
