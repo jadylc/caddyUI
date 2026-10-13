@@ -42,6 +42,10 @@ func TestWAFRenderDetectionOnly(t *testing.T) {
 	for _, want := range []string{
 		"coraza_waf {",
 		"load_owasp_crs",
+		"directives `",
+		"Include @coraza.conf-recommended",
+		"Include @crs-setup.conf.example",
+		"Include @owasp_crs/*.conf",
 		"SecRuleEngine DetectionOnly",
 		"SecAuditEngine RelevantOnly",
 		"SecAuditLog " + wafAuditLogPath,
@@ -49,6 +53,22 @@ func TestWAFRenderDetectionOnly(t *testing.T) {
 	} {
 		if !strings.Contains(conf, want) {
 			t.Fatalf("renderSite = %q, want %q", conf, want)
+		}
+	}
+	assertSecInsideDirectives(t, conf, "SecRuleEngine DetectionOnly", "SecAuditLogType JSON")
+}
+
+// assertSecInsideDirectives 校验 ModSecurity 风格指令出现在 directives 反引号块内，
+// 防止回退到被 coraza-caddy 拒绝的顶层裸 key。
+func assertSecInsideDirectives(t *testing.T, conf string, keys ...string) {
+	t.Helper()
+	dpos := strings.Index(conf, "directives `")
+	if dpos < 0 {
+		t.Fatalf("conf missing directives block: %q", conf)
+	}
+	for _, key := range keys {
+		if kpos := strings.Index(conf, key); kpos < dpos {
+			t.Fatalf("key %q must be inside directives block: %q", key, conf)
 		}
 	}
 }
@@ -65,6 +85,7 @@ func TestWAFRenderOn(t *testing.T) {
 	if !strings.Contains(conf, "SecRuleEngine On") {
 		t.Fatalf("renderSite = %q, want SecRuleEngine On", conf)
 	}
+	assertSecInsideDirectives(t, conf, "SecRuleEngine On")
 }
 
 func TestWAFRenderStaticSite(t *testing.T) {

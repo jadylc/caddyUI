@@ -2480,12 +2480,21 @@ func writeWAFDirective(b *strings.Builder, s Site, indent string) error {
 	if cfg.Mode == "on" {
 		engine = "On"
 	}
+	// coraza-caddy 顶层只接受 load_owasp_crs/directives/tx_id_req_header，
+	// 所有 ModSecurity 风格指令（SecRuleEngine/SecAudit* 等）必须放进 directives 反引号块内，
+	// 否则 parse 时直接报 invalid key。load_owasp_crs 还需在 directives 中 Include CRS 三件套
+	// 才能真正装载 OWASP CRS 规则。
 	fmt.Fprintf(b, "%scoraza_waf {\n", indent)
 	fmt.Fprintf(b, "%s    load_owasp_crs\n", indent)
-	fmt.Fprintf(b, "%s    SecRuleEngine %s\n", indent, engine)
-	fmt.Fprintf(b, "%s    SecAuditEngine RelevantOnly\n", indent)
-	fmt.Fprintf(b, "%s    SecAuditLog %s\n", indent, wafAuditLogPath)
-	fmt.Fprintf(b, "%s    SecAuditLogType JSON\n", indent)
+	fmt.Fprintf(b, "%s    directives `\n", indent)
+	fmt.Fprintf(b, "%s        Include @coraza.conf-recommended\n", indent)
+	fmt.Fprintf(b, "%s        Include @crs-setup.conf.example\n", indent)
+	fmt.Fprintf(b, "%s        Include @owasp_crs/*.conf\n", indent)
+	fmt.Fprintf(b, "%s        SecRuleEngine %s\n", indent, engine)
+	fmt.Fprintf(b, "%s        SecAuditEngine RelevantOnly\n", indent)
+	fmt.Fprintf(b, "%s        SecAuditLog %s\n", indent, wafAuditLogPath)
+	fmt.Fprintf(b, "%s        SecAuditLogType JSON\n", indent)
+	fmt.Fprintf(b, "%s    `\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)
 	return nil
 }

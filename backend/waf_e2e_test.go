@@ -89,6 +89,10 @@ func TestWAFProxyHostHTTPEndToEnd(t *testing.T) {
 	for _, want := range []string{
 		"coraza_waf {",
 		"load_owasp_crs",
+		"directives `",
+		"Include @coraza.conf-recommended",
+		"Include @crs-setup.conf.example",
+		"Include @owasp_crs/*.conf",
 		"SecRuleEngine DetectionOnly",
 		"SecAuditLog " + wafAuditLogPath,
 	} {
@@ -96,6 +100,7 @@ func TestWAFProxyHostHTTPEndToEnd(t *testing.T) {
 			t.Fatalf("rendered conf = %q, want %q", conf, want)
 		}
 	}
+	assertSecInsideDirectives(t, conf, "SecRuleEngine DetectionOnly", "SecAuditLogType JSON")
 
 	// meta 落盘必须带 waf 字段
 	var saved Site
