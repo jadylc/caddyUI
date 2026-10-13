@@ -95,12 +95,14 @@ func TestWAFProxyHostHTTPEndToEnd(t *testing.T) {
 		"Include @owasp_crs/*.conf",
 		"SecRuleEngine DetectionOnly",
 		"SecAuditLog " + wafAuditLogPath,
+		"SecAuditLogType Serial",
+		"SecAuditLogFormat JSON",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Fatalf("rendered conf = %q, want %q", conf, want)
 		}
 	}
-	assertSecInsideDirectives(t, conf, "SecRuleEngine DetectionOnly", "SecAuditLogType JSON")
+	assertSecInsideDirectives(t, conf, "SecRuleEngine DetectionOnly", "SecAuditLogType Serial", "SecAuditLogFormat JSON")
 
 	// meta 落盘必须带 waf 字段
 	var saved Site

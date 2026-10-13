@@ -2493,7 +2493,10 @@ func writeWAFDirective(b *strings.Builder, s Site, indent string) error {
 	fmt.Fprintf(b, "%s        SecRuleEngine %s\n", indent, engine)
 	fmt.Fprintf(b, "%s        SecAuditEngine RelevantOnly\n", indent)
 	fmt.Fprintf(b, "%s        SecAuditLog %s\n", indent, wafAuditLogPath)
-	fmt.Fprintf(b, "%s        SecAuditLogType JSON\n", indent)
+	// SecAuditLogType 只接受 serial/concurrent/https/syslog（coraza v3 约束）；
+	// JSON 是审计输出格式，必须用 SecAuditLogFormat JSON 指定，否则编译报 invalid logger
+	fmt.Fprintf(b, "%s        SecAuditLogType Serial\n", indent)
+	fmt.Fprintf(b, "%s        SecAuditLogFormat JSON\n", indent)
 	fmt.Fprintf(b, "%s    `\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)
 	return nil

@@ -49,13 +49,14 @@ func TestWAFRenderDetectionOnly(t *testing.T) {
 		"SecRuleEngine DetectionOnly",
 		"SecAuditEngine RelevantOnly",
 		"SecAuditLog " + wafAuditLogPath,
-		"SecAuditLogType JSON",
+		"SecAuditLogType Serial",
+		"SecAuditLogFormat JSON",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Fatalf("renderSite = %q, want %q", conf, want)
 		}
 	}
-	assertSecInsideDirectives(t, conf, "SecRuleEngine DetectionOnly", "SecAuditLogType JSON")
+	assertSecInsideDirectives(t, conf, "SecRuleEngine DetectionOnly", "SecAuditLogType Serial", "SecAuditLogFormat JSON")
 }
 
 // assertSecInsideDirectives 校验 ModSecurity 风格指令出现在 directives 反引号块内，
