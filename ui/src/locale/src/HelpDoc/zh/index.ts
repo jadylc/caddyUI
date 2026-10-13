@@ -17,4 +17,5 @@ export * as RedirectionHosts from "./RedirectionHosts.md";
 export * as StaticHosts from "./StaticHosts.md";
 export * as Streams from "./Streams.md";
 export * as SystemSettings from "./SystemSettings.md";
+export * as WafAudit from "./WafAudit.md";
 export * as WakeOnLan from "./WakeOnLan.md";

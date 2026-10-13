@@ -17,4 +17,5 @@ export * from "./RenewCertificateModal";
 export * from "./SiteAccessLogModal";
 export * from "./StaticHostModal";
 export * from "./StreamModal";
+export * from "./WafAuditDetailsModal";
 export * from "./WakeDeviceModal";

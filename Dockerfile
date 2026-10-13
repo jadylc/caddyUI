@@ -36,11 +36,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --with github.com/caddy-dns/cloudflare \
     --with github.com/caddy-dns/dnspod=github.com/caddy-dns/dnspod@fb7cc31c \
     --with github.com/caddy-dns/he \
-    --with github.com/mholt/caddy-l4 \
+--with github.com/mholt/caddy-l4 \
     --with github.com/mholt/caddy-dynamicdns \
     --with golang.org/x/net/publicsuffix@latest \
+    --with github.com/corazawaf/coraza-caddy/v2 \
     && echo "=== built caddy deps ===" \
-    && go version -m /usr/bin/caddy | grep -E 'golang.org/x/net|dnspod' || true
+    && go version -m /usr/bin/caddy | grep -E 'golang.org/x/net|dnspod|corazawaf' || true
 
 # ===== 阶段3：编译 site 管理 API（Go 静态二进制） =====
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS api-builder

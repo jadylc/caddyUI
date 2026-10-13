@@ -60,6 +60,9 @@ var (
 	layer4ConfPath            = "/etc/caddy/global.d/layer4.conf"
 	dynamicDNSConfPath        = "/etc/caddy/global.d/dynamic-dns.conf"
 	trustedProxiesConfPath    = "/etc/caddy/global.d/trusted-proxies.conf"
+	wafConfPath               = "/etc/caddy/global.d/waf.conf"
+	wafAuditDir               = "/config/waf/audit"
+	wafAuditLogPath           = "/config/waf/audit/audit.json"
 	customCertMeta            = "/config/custom-certs.json"
 	customCertsDir            = "/config/custom-certs"
 	accessLogDir              = "/config/access-logs"
@@ -187,6 +190,7 @@ type Site struct {
 	CustomCertFile             string                     `json:"custom_cert_file,omitempty"`
 	CustomKeyFile              string                     `json:"custom_key_file,omitempty"`
 	ForwardAuth                ForwardAuthConfig          `json:"forward_auth,omitempty"`
+	WAF                        WAFConfig                  `json:"waf,omitempty"`
 	HSTSEnabled                bool                       `json:"hsts_enabled,omitempty"`
 	HSTSSubdomains             bool                       `json:"hsts_subdomains,omitempty"`
 	TrustForwardedProto        bool                       `json:"trust_forwarded_proto,omitempty"`
@@ -343,6 +347,27 @@ type ForwardAuthConfig struct {
 	UseGlobal   bool     `json:"use_global,omitempty"`
 }
 
+type WAFConfig struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	Mode    string `json:"mode,omitempty"` // "detection_only" 观察 | "on" 拦截
+}
+
+func normalizeWAFConfig(cfg WAFConfig) WAFConfig {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
+	switch mode {
+	case "on":
+		cfg.Mode = "on"
+	default:
+		cfg.Mode = "detection_only"
+	}
+	return cfg
+}
+
+func siteSupportsWAF(s Site) bool {
+	kind := strings.TrimSpace(s.Kind)
+	return kind == "" || kind == "proxy" || kind == "static"
+}
+
 type AutheliaConfig struct {
 	Enabled     bool     `json:"enabled"`
 	Upstream    string   `json:"upstream"`
@@ -481,7 +506,7 @@ func main() {
 
 	applyEnvOverrides()
 
-	for _, d := range []string{sitesDir, accessLogDir, errorPagesDir, filepath.Dir(legacyAcmeFile), filepath.Dir(logFile), filepath.Dir(layer4ConfPath), filepath.Dir(dynamicDNSConfPath)} {
+	for _, d := range []string{sitesDir, accessLogDir, errorPagesDir, wafAuditDir, filepath.Dir(legacyAcmeFile), filepath.Dir(logFile), filepath.Dir(layer4ConfPath), filepath.Dir(dynamicDNSConfPath)} {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			log.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -513,6 +538,7 @@ func main() {
 	mux.HandleFunc("/caddy/settings/authelia", npmAutheliaSettingsHandler)
 	mux.HandleFunc("/caddy/settings/authentik", npmAuthentikSettingsHandler)
 	mux.HandleFunc("/caddy/settings", settingsHandler)
+	mux.HandleFunc("/caddy/waf/audit", wafAuditHandler)
 	mux.HandleFunc("/caddy/certificates", npmCertificatesHandler)
 	mux.HandleFunc("/caddy/certificates/authorities", npmCertificateAuthoritiesHandler)
 	mux.HandleFunc("/caddy/certificates/dns-providers", npmDNSProvidersHandler)
@@ -2400,6 +2426,10 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 		}
 	}
 
+	if err := writeWAFDirective(&b, s, "    "); err != nil {
+		return "", err
+	}
+
 	if err := writeSiteRouteContent(&b, s, blockInner); err != nil {
 		return "", err
 	}
@@ -2437,6 +2467,64 @@ func renderSiteWithOptions(s Site, creds []Credential, opts renderSiteOptions) (
 func siteSupportsResponseOptimization(s Site) bool {
 	kind := strings.TrimSpace(s.Kind)
 	return kind == "" || kind == "proxy" || kind == "static"
+}
+
+// writeWAFDirective 渲染站点级 coraza_waf 指令块（配合全局 order coraza_waf first 先于其它 handler 执行）。
+// 未启用时不输出任何内容，保证既有站点渲染结果逐字节一致。
+func writeWAFDirective(b *strings.Builder, s Site, indent string) error {
+	cfg := normalizeWAFConfig(s.WAF)
+	if !cfg.Enabled || !siteSupportsWAF(s) {
+		return nil
+	}
+	engine := "DetectionOnly"
+	if cfg.Mode == "on" {
+		engine = "On"
+	}
+	fmt.Fprintf(b, "%scoraza_waf {\n", indent)
+	fmt.Fprintf(b, "%s    load_owasp_crs\n", indent)
+	fmt.Fprintf(b, "%s    SecRuleEngine %s\n", indent, engine)
+	fmt.Fprintf(b, "%s    SecAuditEngine RelevantOnly\n", indent)
+	fmt.Fprintf(b, "%s    SecAuditLog %s\n", indent, wafAuditLogPath)
+	fmt.Fprintf(b, "%s    SecAuditLogType JSON\n", indent)
+	fmt.Fprintf(b, "%s}\n", indent)
+	return nil
+}
+
+// syncWAFGlobalConf 根据站点目录中是否有启用 WAF 的站点，刷新 global.d/waf.conf。
+// 至少一个站点启用时写入 order coraza_waf first，否则删除该文件（避免残留指令）。
+func syncWAFGlobalConf() error {
+	enabled := false
+	entries, err := os.ReadDir(sitesDir)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), metaSuffix) {
+				continue
+			}
+			baseName := strings.TrimSuffix(e.Name(), metaSuffix)
+			if strings.HasPrefix(baseName, managedCertPrefix) || strings.HasPrefix(baseName, wildcardGroupPrefix) {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(sitesDir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var s Site
+			if json.Unmarshal(data, &s) != nil || s.Disabled {
+				continue
+			}
+			if siteSupportsWAF(s) && s.WAF.Enabled {
+				enabled = true
+				break
+			}
+		}
+	}
+	if !enabled {
+		if err := os.Remove(wafConfPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return os.WriteFile(wafConfPath, []byte("order coraza_waf first\n"), 0644)
 }
 
 func siteSupportsErrorHandling(s Site) bool {
@@ -3671,6 +3759,7 @@ func normalizeSiteProxyConfig(s *Site) {
 	s.Response = normalizeResponseOptimizationConfig(s.Response)
 	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
 	s.ErrorHandling = normalizeErrorHandlingConfig(s.ErrorHandling)
+	s.WAF = normalizeWAFConfig(s.WAF)
 	normalizeRootRedirectConfig(s)
 	s.ReverseProxy = normalizeReverseProxyAdvancedConfig(s.ReverseProxy)
 	s.Upstreams = normalizeProxyUpstreams(s.Upstreams, s.Backend)
@@ -3715,6 +3804,7 @@ func normalizeSiteStaticConfig(s *Site) {
 	s.Response = normalizeResponseOptimizationConfig(s.Response)
 	s.AccessLog = normalizeAccessLogConfig(s.AccessLog, s.Name)
 	s.ErrorHandling = normalizeErrorHandlingConfig(s.ErrorHandling)
+	s.WAF = normalizeWAFConfig(s.WAF)
 	normalizeRootRedirectConfig(s)
 	if mode != "static" {
 		s.DirectoryBrowsing = false
@@ -5490,7 +5580,7 @@ func renderAllSiteConfs(creds []Credential) error {
 	entries, err := os.ReadDir(sitesDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return syncWAFGlobalConf()
 		}
 		return err
 	}
@@ -5595,7 +5685,7 @@ func renderAllSiteConfs(creds []Credential) error {
 		name := wildcardGroupPrefix + strconv.Itoa(stableID(group.Address)) + confSuffix
 		os.WriteFile(filepath.Join(sitesDir, name), []byte(conf), 0644)
 	}
-	return nil
+	return syncWAFGlobalConf()
 }
 
 func wildcardRouteGroupsForEntries(entries []os.DirEntry, creds []Credential) (map[string]wildcardRouteGroup, map[string]bool) {
@@ -6418,6 +6508,7 @@ type npmProxyHost struct {
 	Response                   ResponseOptimizationConfig `json:"response,omitempty"`
 	AccessLog                  AccessLogConfig            `json:"access_log,omitempty"`
 	ErrorHandling              ErrorHandlingConfig        `json:"error_handling,omitempty"`
+	WAF                        WAFConfig                  `json:"waf,omitempty"`
 	Owner                      npmUser                    `json:"owner,omitempty"`
 	Certificate                *npmCertificate            `json:"certificate,omitempty"`
 	AccessList                 *npmAccessList             `json:"access_list,omitempty"`
@@ -6449,6 +6540,7 @@ type npmStaticHost struct {
 	Response          ResponseOptimizationConfig `json:"response,omitempty"`
 	AccessLog         AccessLogConfig            `json:"access_log,omitempty"`
 	ErrorHandling     ErrorHandlingConfig        `json:"error_handling,omitempty"`
+	WAF               WAFConfig                  `json:"waf,omitempty"`
 	Owner             npmUser                    `json:"owner,omitempty"`
 	Certificate       *npmCertificate            `json:"certificate,omitempty"`
 	AccessList        *npmAccessList             `json:"access_list,omitempty"`
@@ -9036,6 +9128,7 @@ func siteToNPMProxyHost(s Site, certByDomain map[string]npmCertificate) npmProxy
 		Response:                   normalizeResponseOptimizationConfig(s.Response),
 		AccessLog:                  normalizeAccessLogConfig(s.AccessLog, s.Name),
 		ErrorHandling:              normalizeErrorHandlingConfig(s.ErrorHandling),
+		WAF:                        normalizeWAFConfig(s.WAF),
 		Owner:                      localNPMUser,
 		Certificate:                cert,
 		AccessList:                 accessList,
@@ -9219,6 +9312,7 @@ func npmProxyHostToSite(p npmProxyHost, existingName string) (Site, error) {
 		CustomCertFile:             customCertFile,
 		CustomKeyFile:              customKeyFile,
 		ForwardAuth:                forwardAuth,
+		WAF:                        normalizeWAFConfig(p.WAF),
 		UpstreamInsecureSkipVerify: reverseProxy.Transport.TLSInsecureSkipVerify,
 		ReverseProxy:               reverseProxy,
 		Response:                   normalizeResponseOptimizationConfig(p.Response),
@@ -9403,6 +9497,7 @@ func siteToNPMStaticHost(s Site, certByDomain map[string]npmCertificate) npmStat
 		Response:       normalizeResponseOptimizationConfig(s.Response),
 		AccessLog:      normalizeAccessLogConfig(s.AccessLog, s.Name),
 		ErrorHandling:  normalizeErrorHandlingConfig(s.ErrorHandling),
+		WAF:            normalizeWAFConfig(s.WAF),
 		Owner:          localNPMUser,
 		Certificate:    cert,
 		AccessList:     accessList,
@@ -9443,6 +9538,7 @@ func npmStaticHostToSite(item npmStaticHost, existingName string) (Site, error) 
 		Response:            normalizeResponseOptimizationConfig(item.Response),
 		AccessLog:           normalizeAccessLogConfig(item.AccessLog, defaultString(existingName, "static-"+uniqueSiteName(firstDomain(item.DomainNames)))),
 		ErrorHandling:       normalizeErrorHandlingConfig(item.ErrorHandling),
+		WAF:                 normalizeWAFConfig(item.WAF),
 		Disabled:            !item.Enabled,
 	}
 	if site.Wildcard {
@@ -12056,6 +12152,124 @@ func randomHex(n int) string {
 	return fmt.Sprintf("%x", b)
 }
 
+// wafAuditEntry 是 coraza JSON 审计日志展平后的对外结构，
+// Raw 保留 coraza 原始记录用于前端详情展示。
+type wafAuditEntry struct {
+	TransactionID string `json:"transaction_id,omitempty"`
+	Timestamp     string `json:"timestamp,omitempty"`
+	Host          string `json:"host,omitempty"`
+	URI           string `json:"uri,omitempty"`
+	Method        string `json:"method,omitempty"`
+	RuleID        string `json:"rule_id,omitempty"`
+	Message       string `json:"message,omitempty"`
+	Severity      string `json:"severity,omitempty"`
+	Action        string `json:"action,omitempty"`
+	RemoteAddr    string `json:"remote_addr,omitempty"`
+	Raw           string `json:"-"`
+}
+
+func wafAuditHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 50
+	offset := 0
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("offset")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	hostFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("host")))
+
+	data, err := os.ReadFile(wafAuditLogPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, http.StatusOK, map[string]any{"total": 0, "items": []any{}})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	items := []wafAuditEntry{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var raw map[string]any
+		if json.Unmarshal([]byte(line), &raw) != nil {
+			continue
+		}
+		entry := wafAuditEntry{Raw: line}
+		if tx, ok := raw["transaction"].(map[string]any); ok {
+			entry.TransactionID, _ = tx["id"].(string)
+			entry.Timestamp, _ = tx["time_stamp"].(string)
+			if ip, ok := tx["client_ip"].(string); ok {
+				entry.RemoteAddr = ip
+			}
+			if req, ok := tx["request"].(map[string]any); ok {
+				entry.URI, _ = req["uri"].(string)
+				entry.Method, _ = req["method"].(string)
+				if hdrs, ok := req["headers"].(map[string]any); ok {
+					if host, ok := hdrs["Host"].(string); ok {
+						entry.Host = host
+					}
+				}
+			}
+		}
+		if ad, ok := raw["audit_data"].(map[string]any); ok {
+			if msgs, ok := ad["messages"].([]any); ok {
+				parts := []string{}
+				for _, m := range msgs {
+					mm, _ := m.(map[string]any)
+					if msg, ok := mm["message"].(string); ok && strings.TrimSpace(msg) != "" {
+						parts = append(parts, msg)
+					}
+					if det, ok := mm["details"].(map[string]any); ok {
+						if rid, ok := det["ruleId"].(string); ok && entry.RuleID == "" {
+							entry.RuleID = rid
+						}
+						if sev, ok := det["severity"].(string); ok && entry.Severity == "" {
+							entry.Severity = sev
+						}
+						if act, ok := det["action"].(string); ok && entry.Action == "" {
+							entry.Action = act
+						}
+					}
+				}
+				entry.Message = strings.Join(parts, " | ")
+			}
+		}
+		if hostFilter != "" && !strings.Contains(strings.ToLower(entry.Host), hostFilter) {
+			continue
+		}
+		items = append(items, entry)
+	}
+	total := len(items)
+	// 时间倒序：文件按写入时间正序排列
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
+	}
+	if offset > total {
+		offset = total
+	}
+	if offset+limit > total {
+		limit = total - offset
+	}
+	if offset < total {
+		items = items[offset : offset+limit]
+	} else {
+		items = []wafAuditEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"total": total, "items": items, "limit": limit, "offset": offset})
+}
+
 func loadAuditLogs() ([]auditEntry, error) {
 	items := []auditEntry{}
 	if err := loadJSONFile(auditLogPath, &items); err != nil {
@@ -12499,6 +12713,8 @@ func siteAuditMeta(s Site) map[string]any {
 		"accessListID":     s.AccessListID,
 		"errorTemplateID":  s.ErrorHandling.TemplateID,
 		"policyTemplateID": s.Response.PolicyTemplateID,
+		"wafEnabled":       s.WAF.Enabled,
+		"wafMode":          normalizeWAFConfig(s.WAF).Mode,
 	}
 }
 

@@ -198,6 +198,10 @@ const menuItems: MenuItem[] = [
 				to: "/audit-log",
 				label: "auditlogs",
 			},
+			{
+				to: "/caddy/waf-audit",
+				label: "waf-audit",
+			},
 		],
 	},
 ];

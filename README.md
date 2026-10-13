@@ -57,6 +57,7 @@
 | DNS-01 | 阿里云 DNS、Cloudflare、DNSPod，支持 DNSPod 委派 Zone |
 | 动态 DNS | 基于 Caddy Dynamic DNS 插件生成配置，自动同步域名解析 |
 | 访问控制 | Basic Auth 访问列表、IP allow/deny、Authelia / authentik forward_auth |
+| Web 应用防火墙 | 基于 Coraza WAF 的站点防护，支持反向代理与静态站点、OWASP CRS 规则集、阻断/检测双模式、独立 WAF 审计页 |
 | 通信规则 | 独立管理 TCP/UDP 转发规则，并关联到代理服务 |
 | 域名监控 | DNS、SSL 证书到期、签发机构、域名注册到期、非 443 SSL 目标 |
 | 运行观测 | 请求量、状态码、P95 延迟、上游健康、最近错误和访问日志 |
@@ -204,6 +205,15 @@ ports:
 - 支持 Authelia / authentik forward_auth 集成。
 - 未启用认证的站点不会被认证配置拦截。
 
+### Web 应用防火墙
+
+- 基于 `github.com/corazawaf/coraza-caddy/v2` 接入 OWASP Core Rule Set，为反向代理和静态站点提供应用层防护。
+- 每个站点可在「安全」标签页独立开关 WAF，并选择两种模式：
+  - **阻断模式**：命中规则即拦截请求并向客户端返回拒绝响应；
+  - **检测模式**（Detection Only）：只记录违规请求，不拦截，便于先观察规则命中情况再上线。
+- 拦截与违规请求写入独立 JSON 审计日志，「WAF 审计」页面支持按站点过滤查看明细。
+- 重定向、404、TCP/UDP 等非代理/静态站点类型不参与 WAF 配置；关闭全部站点 WAF 后会自动移除全局 WAF 指令，还原没有 WAF 时的行为。
+
 ### 通信规则
 
 - 可管理 TCP/UDP Streams。
@@ -305,6 +315,8 @@ example.com:8443
 | `/config/wake-devices.json` | 网络唤醒设备配置 |
 | `/config/access-logs/*.log` | 站点访问日志 |
 | `/config/caddy/caddy.log` | Caddy 和后端 API 日志 |
+| `/etc/caddy/global.d/waf.conf` | WAF 全局指令（`order coraza_waf first`），有站点启用 WAF 时自动生成 |
+| `/config/waf/audit/audit.json` | WAF 审计日志，按行追加 JSON 记录 |
 
 ## 环境变量
 
@@ -329,7 +341,7 @@ Dockerfile 分为四个阶段：
 | 阶段 | 内容 |
 | --- | --- |
 | `ui-builder` | 使用 Node 构建前端 |
-| `caddy-builder` | 使用 `xcaddy` 构建带 DNS 插件、L4、Dynamic DNS 的 Caddy |
+| `caddy-builder` | 使用 `xcaddy` 构建带 DNS 插件、L4、Dynamic DNS、Coraza WAF 的 Caddy |
 | `api-builder` | 使用 Go 构建后端 API 静态二进制 |
 | `runtime` | 合并到 Alpine 运行镜像 |
 
@@ -341,6 +353,7 @@ Dockerfile 分为四个阶段：
 - `github.com/caddy-dns/he`
 - `github.com/mholt/caddy-l4`
 - `github.com/mholt/caddy-dynamicdns`
+- `github.com/corazawaf/coraza-caddy/v2`
 
 ## 本地开发验证
 

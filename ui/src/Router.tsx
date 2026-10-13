@@ -16,6 +16,7 @@ const Dashboard = lazy(() => import("src/pages/Dashboard"));
 const Certificates = lazy(() => import("src/pages/Certificates"));
 const Access = lazy(() => import("src/pages/Access"));
 const AuditLog = lazy(() => import("src/pages/AuditLog"));
+const WafAudit = lazy(() => import("src/pages/WafAudit"));
 const ProxyHosts = lazy(() => import("src/pages/Nginx/ProxyHosts"));
 const StaticHosts = lazy(() => import("src/pages/Nginx/StaticHosts"));
 const RedirectionHosts = lazy(() => import("src/pages/Nginx/RedirectionHosts"));
@@ -58,6 +59,7 @@ function Router() {
 							<Route path="/access" element={<Access />} />
 							<Route path="/wake-on-lan" element={<WakeOnLan />} />
 							<Route path="/audit-log" element={<AuditLog />} />
+							<Route path="/caddy/waf-audit" element={<WafAudit />} />
 							<Route path="/settings/authelia" element={<Settings />} />
 							<Route path="/settings/authentik" element={<Settings />} />
 							<Route path="/settings/credentials" element={<CredentialSettings />} />

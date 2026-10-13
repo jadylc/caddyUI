@@ -121,6 +121,9 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 
 		const listenPorts = parseListenPorts(values.listenPort);
 		const mode = values.mode === "spa" ? "spa" : "static";
+		const waf = values.waf?.enabled
+			? { enabled: true, mode: values.waf.mode === "on" ? "on" : "detection_only" }
+			: { enabled: false, mode: "detection_only" };
 		const payload = {
 			...values,
 			id: id === "new" ? undefined : id,
@@ -133,6 +136,7 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 			indexFile: mode === "spa" ? String(values.indexFile || "/index.html").trim() : "",
 			directoryBrowsing: mode === "static" && !!values.directoryBrowsing,
 			accessListId: Number(values.accessListId || 0),
+			waf,
 			response: normalizeResponseOptimization(values.response, "public, max-age=3600"),
 			accessLog: normalizeAccessLog(values.accessLog),
 			errorHandling: normalizeErrorHandling(values.errorHandling),
@@ -190,6 +194,11 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 								hstsEnabled: initialData?.hstsEnabled ?? data?.hstsEnabled ?? false,
 								hstsSubdomains:
 									initialData?.hstsSubdomains ?? data?.hstsSubdomains ?? false,
+								waf: {
+									enabled: false,
+									mode: "detection_only",
+									...((initialData?.waf ?? data?.waf) as any),
+								},
 								response: withResponseOptimizationDefaults(
 									initialData?.response ?? data?.response,
 									"public, max-age=3600",
@@ -271,6 +280,18 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 														role="tab"
 													>
 														运维
+													</a>
+												</li>
+												<li className="nav-item" role="presentation">
+													<a
+														href="#tab-static-security"
+														className="nav-link"
+														data-bs-toggle="tab"
+														aria-selected="false"
+														tabIndex={-1}
+														role="tab"
+													>
+														安全
 													</a>
 												</li>
 												<li className="nav-item" role="presentation">
@@ -449,6 +470,64 @@ const StaticHostModal = EasyModal.create(({ id, initialData, visible, remove }: 
 													<ErrorHandlingFields color="bg-cyan" />
 													<h4 className="py-2 mt-4">访问日志</h4>
 													<AccessLogFields color="bg-cyan" />
+												</div>
+												<div className="tab-pane" id="tab-static-security" role="tabpanel">
+													<h4 className="py-2">Web 应用防火墙</h4>
+													<div className="divide-y">
+														<div>
+															<label className="row" htmlFor="wafEnabled">
+																<span className="col">
+																	WAF 防护
+																	<small className="d-block text-secondary">
+																		基于 Coraza + OWASP CRS 规则集
+																	</small>
+																</span>
+																<span className="col-auto">
+																	<Field name="waf.enabled" type="checkbox">
+																		{({ field }: any) => (
+																			<label className="form-check form-check-single form-switch">
+																				<input
+																					{...field}
+																					id="wafEnabled"
+																					className={cn(
+																						"form-check-input",
+																						{
+																							"bg-cyan":
+																								field.checked,
+																						},
+																					)}
+																					type="checkbox"
+																				/>
+																			</label>
+																		)}
+																	</Field>
+																</span>
+															</label>
+														</div>
+														{values.waf?.enabled && (
+															<div className="mt-3">
+																<div className="mb-3">
+																	<label className="form-label" htmlFor="wafMode">
+																		防护模式
+																	</label>
+																	<Field
+																		as="select"
+																		name="waf.mode"
+																		id="wafMode"
+																		className="form-control"
+																	>
+																		<option value="detection_only">
+																			仅检测（推荐，只记录不拦截）
+																		</option>
+																		<option value="on">拦截模式（阻断攻击请求）</option>
+																	</Field>
+																	<small className="text-secondary">
+																		检测到攻击流量时会写入 WAF 审计日志
+																	</small>
+																</div>
+															</div>
+														)}
+													</div>
 												</div>
 												<div className="tab-pane" id="tab-static-ssl" role="tabpanel">
 													<DomainCertificateBindingsField />

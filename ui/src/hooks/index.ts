@@ -36,3 +36,4 @@ export * from "./useStreams";
 export * from "./useTheme";
 export * from "./useWakeDevice";
 export * from "./useWakeDevices";
+export * from "./useWafAudits";

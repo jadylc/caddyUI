@@ -2,7 +2,10 @@
 node_modules/
 dist/
 _tmp/
+.tmp/
+.dumate/
 *.exe
 *.bin
 backend/.cache/
 .claude/
+*.docx

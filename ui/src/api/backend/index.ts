@@ -73,6 +73,7 @@ export * from "./getStreams";
 export * from "./getUser";
 export * from "./getWakeDevice";
 export * from "./getWakeDevices";
+export * from "./getWafAudits";
 export * from "./helpers";
 export * from "./models";
 export * from "./renewCertificate";

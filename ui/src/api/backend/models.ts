@@ -127,6 +127,11 @@ export interface ForwardAuthConfig {
 	useGlobal?: boolean;
 }
 
+export interface WAFConfig {
+	enabled: boolean;
+	mode: "on" | "detection_only";
+}
+
 export interface ReverseProxyAdvancedConfig {
 	healthCheck?: ReverseProxyHealthCheckConfig;
 	retry?: ReverseProxyRetryConfig;
@@ -385,6 +390,7 @@ export interface ProxyHost {
 	hstsSubdomains: boolean;
 	trustForwardedProto: boolean;
 	forwardAuth?: ForwardAuthConfig;
+	waf?: WAFConfig;
 	upstreamInsecureSkipVerify?: boolean;
 	reverseProxy?: ReverseProxyAdvancedConfig;
 	response?: ResponseOptimizationConfig;
@@ -419,6 +425,7 @@ export interface StaticHost {
 	enabled: boolean;
 	hstsEnabled: boolean;
 	hstsSubdomains: boolean;
+	waf?: WAFConfig;
 	response?: ResponseOptimizationConfig;
 	accessLog?: AccessLogConfig;
 	errorHandling?: ErrorHandlingConfig;
@@ -426,6 +433,26 @@ export interface StaticHost {
 	owner?: User;
 	accessList?: AccessList;
 	certificate?: Certificate;
+}
+
+export interface WafAuditEntry {
+	transactionId?: string;
+	timestamp?: string;
+	host?: string;
+	uri?: string;
+	method?: string;
+	ruleId?: string;
+	message?: string;
+	severity?: string;
+	action?: string;
+	remoteAddr?: string;
+}
+
+export interface WafAuditResponse {
+	total: number;
+	items: WafAuditEntry[];
+	limit: number;
+	offset: number;
 }
 
 export interface DeadHost {

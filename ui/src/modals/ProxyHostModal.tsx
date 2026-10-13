@@ -297,6 +297,9 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 		const response = normalizeResponseOptimization(values.response, "public, max-age=300");
 		const accessLog = normalizeAccessLog(values.accessLog);
 		const errorHandling = normalizeErrorHandling(values.errorHandling);
+		const waf = values.waf?.enabled
+			? { enabled: true, mode: values.waf.mode === "on" ? "on" : "detection_only" }
+			: { enabled: false, mode: "detection_only" };
 
 		const payload = {
 			...values,
@@ -313,6 +316,7 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 			locations: normalizeLocations(values.locations),
 			accessListId: Number(values.accessListId || 0),
 			forwardAuth,
+			waf,
 			reverseProxy,
 			response,
 			accessLog,
@@ -411,10 +415,15 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 											data?.forwardAuth?.copyHeaders ??
 											""),
 								},
-								response: withResponseOptimizationDefaults(
-									initialData?.response ?? data?.response,
-									"public, max-age=300",
-								),
+								waf: {
+										enabled: false,
+										mode: "detection_only",
+										...((initialData?.waf ?? data?.waf) as any),
+									},
+									response: withResponseOptimizationDefaults(
+										initialData?.response ?? data?.response,
+										"public, max-age=300",
+									),
 								accessLog: withAccessLogDefaults(initialData?.accessLog ?? data?.accessLog),
 								errorHandling: withErrorHandlingDefaults(
 									initialData?.errorHandling ?? data?.errorHandling,
@@ -490,30 +499,42 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 														反代高级
 													</a>
 												</li>
-												<li className="nav-item" role="presentation">
-													<a
-														href="#tab-response"
-														className="nav-link"
-														data-bs-toggle="tab"
-														aria-selected="false"
-														tabIndex={-1}
-														role="tab"
-													>
-														运维
-													</a>
-												</li>
-												<li className="nav-item" role="presentation">
-													<a
-														href="#tab-ssl"
-														className="nav-link"
-														data-bs-toggle="tab"
-														aria-selected="false"
-														tabIndex={-1}
-														role="tab"
-													>
-														<T id="column.ssl" />
-													</a>
-												</li>
+<li className="nav-item" role="presentation">
+												<a
+													href="#tab-response"
+													className="nav-link"
+													data-bs-toggle="tab"
+													aria-selected="false"
+													tabIndex={-1}
+													role="tab"
+												>
+													运维
+												</a>
+											</li>
+											<li className="nav-item" role="presentation">
+												<a
+													href="#tab-security"
+													className="nav-link"
+													data-bs-toggle="tab"
+													aria-selected="false"
+													tabIndex={-1}
+													role="tab"
+												>
+													安全
+												</a>
+											</li>
+											<li className="nav-item" role="presentation">
+												<a
+													href="#tab-ssl"
+													className="nav-link"
+													data-bs-toggle="tab"
+													aria-selected="false"
+													tabIndex={-1}
+													role="tab"
+												>
+													<T id="column.ssl" />
+												</a>
+											</li>
 											</ul>
 										</div>
 										<div className="card-body">
@@ -580,44 +601,6 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 													<UpstreamsFields />
 													<AccessField />
 													<RootRedirectFields />
-													<div className="my-3">
-														<h4 className="py-2">
-															<T id="options" />
-														</h4>
-														<div className="divide-y">
-															<div>
-																<label className="row" htmlFor="forwardAuthEnabled">
-																	<span className="col">
-																		<T id="forward-auth.toggle" />
-																	</span>
-																	<span className="col-auto">
-																		<Field
-																			name="forwardAuth.enabled"
-																			type="checkbox"
-																		>
-																			{({ field }: any) => (
-																				<label className="form-check form-check-single form-switch">
-																					<input
-																						{...field}
-																						id="forwardAuthEnabled"
-																						className={cn(
-																							"form-check-input",
-																							{
-																								"bg-lime":
-																									field.checked,
-																							},
-																						)}
-																						type="checkbox"
-																					/>
-																				</label>
-																			)}
-																		</Field>
-																	</span>
-																</label>
-																<ForwardAuthFields />
-															</div>
-														</div>
-													</div>
 												</div>
 												<div className="tab-pane" id="tab-locations" role="tabpanel">
 													<LocationsFields
@@ -637,6 +620,100 @@ const ProxyHostModal = EasyModal.create(({ id, initialData, visible, remove }: P
 													<ErrorHandlingFields color="bg-lime" />
 													<h4 className="py-2 mt-4">访问日志</h4>
 													<AccessLogFields color="bg-lime" />
+												</div>
+												<div className="tab-pane" id="tab-security" role="tabpanel">
+													<h4 className="py-2">Web 应用防火墙</h4>
+													<div className="divide-y">
+														<div>
+															<label className="row" htmlFor="wafEnabled">
+																<span className="col">
+																	WAF 防护
+																	<small className="d-block text-secondary">
+																		基于 Coraza + OWASP CRS 规则集
+																	</small>
+																</span>
+																<span className="col-auto">
+																	<Field name="waf.enabled" type="checkbox">
+																		{({ field }: any) => (
+																			<label className="form-check form-check-single form-switch">
+																				<input
+																					{...field}
+																					id="wafEnabled"
+																					className={cn(
+																						"form-check-input",
+																						{
+																							"bg-lime":
+																								field.checked,
+																						},
+																					)}
+																					type="checkbox"
+																				/>
+																			</label>
+																		)}
+																	</Field>
+																</span>
+															</label>
+														</div>
+														{values.waf?.enabled && (
+															<div className="mt-3">
+																<div className="mb-3">
+																	<label className="form-label" htmlFor="wafMode">
+																		防护模式
+																	</label>
+																	<Field
+																		as="select"
+																		name="waf.mode"
+																		id="wafMode"
+																		className="form-control"
+																	>
+																		<option value="detection_only">
+																			仅检测（推荐，只记录不拦截）
+																		</option>
+																		<option value="on">拦截模式（阻断攻击请求）</option>
+																	</Field>
+																	<small className="text-secondary">
+																		检测到攻击流量时会写入 WAF 审计日志
+																	</small>
+																</div>
+															</div>
+														)}
+													</div>
+													<h4 className="py-2 mt-4">
+														<T id="forward-auth" />
+													</h4>
+													<div className="divide-y">
+														<div>
+															<label className="row" htmlFor="forwardAuthEnabled">
+																<span className="col">
+																	<T id="forward-auth.toggle" />
+																</span>
+																<span className="col-auto">
+																	<Field
+																		name="forwardAuth.enabled"
+																		type="checkbox"
+																	>
+																		{({ field }: any) => (
+																			<label className="form-check form-check-single form-switch">
+																				<input
+																					{...field}
+																					id="forwardAuthEnabled"
+																					className={cn(
+																						"form-check-input",
+																						{
+																							"bg-lime":
+																								field.checked,
+																						},
+																					)}
+																					type="checkbox"
+																				/>
+																			</label>
+																		)}
+																	</Field>
+																</span>
+															</label>
+															<ForwardAuthFields />
+														</div>
+													</div>
 												</div>
 												<div className="tab-pane" id="tab-ssl" role="tabpanel">
 													<DomainCertificateBindingsField />

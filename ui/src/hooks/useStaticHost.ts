@@ -26,6 +26,10 @@ const fetchStaticHost = (id: number | "new") => {
 			enabled: true,
 			hstsEnabled: false,
 			hstsSubdomains: false,
+			waf: {
+				enabled: false,
+				mode: "detection_only",
+			},
 		} as StaticHost);
 	}
 	return getStaticHost(id, ["owner"]);

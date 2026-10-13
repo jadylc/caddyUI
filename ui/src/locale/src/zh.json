@@ -23,6 +23,9 @@
   "access-list.public.subtitle": {
     "defaultMessage": "无需基本认证"
   },
+  "waf-audit": {
+    "defaultMessage": "WAF 审计"
+  },
   "wake-on-lan": {
     "defaultMessage": "网络唤醒"
   },
@@ -264,7 +267,7 @@
     "defaultMessage": "查看详情"
   },
   "auditlogs": {
-    "defaultMessage": "审计日志"
+    "defaultMessage": "操作审计"
   },
   "cancel": {
     "defaultMessage": "取消"

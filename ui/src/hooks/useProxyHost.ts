@@ -36,6 +36,10 @@ const fetchProxyHost = (id: number | "new") => {
 				copyHeaders: [],
 				useGlobal: true,
 			},
+			waf: {
+				enabled: false,
+				mode: "detection_only",
+			},
 		} as ProxyHost);
 	}
 	return getProxyHost(id, ["owner"]);
