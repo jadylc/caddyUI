@@ -37,6 +37,7 @@
 ## 目录
 
 - [功能亮点](#功能亮点)
+- [界面预览](#界面预览)
 - [快速开始](#快速开始)
 - [端口说明](#端口说明)
 - [核心功能](#核心功能)
@@ -66,6 +67,23 @@
 | 网络唤醒 | 保存唤醒设备，一键发送 Wake-on-LAN 魔术包 |
 | 凭据复用 | DNS、ACME、域名商和推送凭据统一保存到 `/config` |
 | 多架构镜像 | 支持 `linux/amd64` 和 `linux/arm64` |
+
+## 界面预览
+
+以下截图来自本面板实际运行界面（深色主题）：
+
+### 仪表板与站点管理
+
+<table>
+  <tr>
+    <td align="center"><b>仪表板</b><br><img src="docs/screenshot-dashboard.png" alt="仪表板" width="400"></td>
+    <td align="center"><b>代理服务列表</b><br><img src="docs/screenshot-proxy.png" alt="代理服务列表" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>WAF 审计</b><br><img src="docs/screenshot-waf-audit.png" alt="WAF 审计" width="400"></td>
+    <td align="center"><b>运行观测</b><br><img src="docs/screenshot-observability.png" alt="运行观测" width="400"></td>
+  </tr>
+</table>
 
 ## 快速开始
 
