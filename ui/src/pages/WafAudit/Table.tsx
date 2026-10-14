@@ -3,11 +3,13 @@ import { useMemo } from "react";
 import type { WafAuditEntry } from "src/api/backend";
 import { TableLayout } from "src/components/Table/TableLayout";
 import { T } from "src/locale";
+import { summarizeWafMessage, translateAction, translateSeverity } from "./translateMessage";
 
 interface Props {
 	data: WafAuditEntry[];
 	isFetching?: boolean;
 	onSelectItem?: (entry: WafAuditEntry) => void;
+	emptyState?: React.ReactNode;
 }
 
 const formatTime = (value?: string) => {
@@ -15,7 +17,7 @@ const formatTime = (value?: string) => {
 	return value.includes("T") ? value.replace("T", " ").replace(/\.?\d*Z?$/, "") : value;
 };
 
-export default function Table({ data, isFetching, onSelectItem }: Props) {
+export default function Table({ data, isFetching, onSelectItem, emptyState }: Props) {
 	const columnHelper = createColumnHelper<WafAuditEntry>();
 	const columns = useMemo(
 		() => [
@@ -44,25 +46,19 @@ export default function Table({ data, isFetching, onSelectItem }: Props) {
 			columnHelper.accessor("severity", {
 				id: "severity",
 				header: "严重度",
-				cell: (info: any) => info.getValue() || "—",
+				cell: (info: any) => translateSeverity(info.getValue()),
 				size: 90,
 			}),
 			columnHelper.accessor("action", {
 				id: "action",
 				header: "动作",
-				cell: (info: any) => info.getValue() || "—",
+				cell: (info: any) => translateAction(info.getValue()),
 				size: 90,
-			}),
-			columnHelper.accessor("ruleId", {
-				id: "ruleId",
-				header: "规则 ID",
-				cell: (info: any) => info.getValue() || "—",
-				size: 110,
 			}),
 			columnHelper.accessor("message", {
 				id: "message",
 				header: "消息",
-				cell: (info: any) => info.getValue() || "—",
+				cell: (info: any) => summarizeWafMessage(info.getValue()),
 			}),
 			columnHelper.display({
 				id: "id",
@@ -100,5 +96,5 @@ export default function Table({ data, isFetching, onSelectItem }: Props) {
 		enableSortingRemoval: false,
 	});
 
-	return <TableLayout tableInstance={tableInstance} />;
+	return <TableLayout tableInstance={tableInstance} emptyState={emptyState} />;
 }
