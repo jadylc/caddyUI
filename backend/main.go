@@ -12180,6 +12180,20 @@ type wafAuditEntry struct {
 	Raw           string `json:"-"`
 }
 
+// wafMsgFieldRe 匹配 coraza error_message 富文本中的 [key "value"] 片段，
+// 用于提取 id/msg/severity 等结构化字段。
+var wafMsgFieldRe = regexp.MustCompile(`\[(id|msg|severity) "([^"]*)"\]`)
+
+// extractWafField 从 coraza error_message 富文本中提取指定 key 的值。
+func extractWafField(text, key string) string {
+	for _, m := range wafMsgFieldRe.FindAllStringSubmatch(text, -1) {
+		if len(m) == 3 && m[1] == key && strings.TrimSpace(m[2]) != "" {
+			return m[2]
+		}
+	}
+	return ""
+}
+
 func wafAuditHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -12221,7 +12235,11 @@ func wafAuditHandler(w http.ResponseWriter, r *http.Request) {
 		entry := wafAuditEntry{Raw: line}
 		if tx, ok := raw["transaction"].(map[string]any); ok {
 			entry.TransactionID, _ = tx["id"].(string)
-			entry.Timestamp, _ = tx["time_stamp"].(string)
+			entry.Timestamp, _ = tx["timestamp"].(string)
+			if entry.Timestamp == "" {
+				// 兼容旧格式
+				entry.Timestamp, _ = tx["time_stamp"].(string)
+			}
 			if ip, ok := tx["client_ip"].(string); ok {
 				entry.RemoteAddr = ip
 			}
@@ -12229,34 +12247,47 @@ func wafAuditHandler(w http.ResponseWriter, r *http.Request) {
 				entry.URI, _ = req["uri"].(string)
 				entry.Method, _ = req["method"].(string)
 				if hdrs, ok := req["headers"].(map[string]any); ok {
-					if host, ok := hdrs["Host"].(string); ok {
-						entry.Host = host
+					// coraza v3: headers key 全小写且值为数组
+					if hosts, ok := hdrs["host"].([]any); ok && len(hosts) > 0 {
+						entry.Host, _ = hosts[0].(string)
 					}
 				}
+			}
+			if entry.Host == "" {
+				if sid, ok := tx["server_id"].(string); ok {
+					entry.Host = sid
+				}
+			}
+			if interrupted, ok := tx["is_interrupted"].(bool); ok && interrupted {
+				entry.Action = "deny"
 			}
 		}
-		if ad, ok := raw["audit_data"].(map[string]any); ok {
-			if msgs, ok := ad["messages"].([]any); ok {
-				parts := []string{}
-				for _, m := range msgs {
-					mm, _ := m.(map[string]any)
-					if msg, ok := mm["message"].(string); ok && strings.TrimSpace(msg) != "" {
-						parts = append(parts, msg)
-					}
-					if det, ok := mm["details"].(map[string]any); ok {
-						if rid, ok := det["ruleId"].(string); ok && entry.RuleID == "" {
-							entry.RuleID = rid
-						}
-						if sev, ok := det["severity"].(string); ok && entry.Severity == "" {
-							entry.Severity = sev
-						}
-						if act, ok := det["action"].(string); ok && entry.Action == "" {
-							entry.Action = act
-						}
-					}
+		// coraza v3: messages 位于根级，命中详情在 error_message 富文本中
+		if msgs, ok := raw["messages"].([]any); ok {
+			parts := []string{}
+			for _, m := range msgs {
+				mm, _ := m.(map[string]any)
+				em, _ := mm["error_message"].(string)
+				if em == "" {
+					continue
 				}
-				entry.Message = strings.Join(parts, " | ")
+				if entry.Action == "" && strings.Contains(em, "Access denied") {
+					entry.Action = "deny"
+				}
+				if rid := extractWafField(em, "id"); rid != "" && entry.RuleID == "" {
+					entry.RuleID = rid
+				}
+				if sev := extractWafField(em, "severity"); sev != "" && entry.Severity == "" {
+					entry.Severity = sev
+				}
+				if msg := extractWafField(em, "msg"); msg != "" {
+					parts = append(parts, msg)
+				}
 			}
+			if entry.Action == "" {
+				entry.Action = "observe"
+			}
+			entry.Message = strings.Join(parts, " | ")
 		}
 		if hostFilter != "" && !strings.Contains(strings.ToLower(entry.Host), hostFilter) {
 			continue
