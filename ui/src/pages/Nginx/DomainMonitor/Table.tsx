@@ -8,10 +8,11 @@ import {
 	useReactTable,
 } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
-import type { DomainMonitor } from "src/api/backend";
+import type { DomainMonitor, ProviderSpec } from "src/api/backend";
 import { CreatedOnFormatter, DateFormatter, EmptyData, HasPermission } from "src/components";
 import { TableLayout } from "src/components/Table/TableLayout";
 import { intl, T } from "src/locale";
+import { useProviders } from "src/hooks/useProviders";
 import { CERTIFICATES, MANAGE } from "src/modules/Permissions";
 import styles from "./Table.module.css";
 
@@ -53,25 +54,14 @@ const primaryDomainCell = (item: DomainMonitor) => (
 	</div>
 );
 
-const registrarProviderName = (provider?: string) => {
-	switch ((provider || "").trim().toLowerCase()) {
-		case "alidns":
-		case "aliyun":
-			return "阿里云";
-		case "digitalplat":
-			return "DigitalPlat";
-		case "dnshe":
-			return "DNSHE";
-		case "cloudflare":
-			return "Cloudflare";
-		case "dnspod":
-			return "DNSPod";
-		default:
-			return provider || "";
-	}
+// 域名商展示名统一来自后端注册表（见 useProviders），不再在前端硬编码。
+const registrarProviderName = (provider?: string, specs?: ProviderSpec[]) => {
+	const id = (provider || "").trim();
+	const spec = specs?.find((item) => item.id === id);
+	return spec?.name || id;
 };
 
-const registrarProviderCell = (item: DomainMonitor) => {
+const registrarProviderCell = (item: DomainMonitor, specs?: ProviderSpec[]) => {
 	const provider = item.registrarProvider || metaValue(item, "registrarProvider", "registrar_provider");
 	if (!provider) {
 		return <span className="text-muted">-</span>;
@@ -79,9 +69,9 @@ const registrarProviderCell = (item: DomainMonitor) => {
 	return (
 		<span
 			className={`badge bg-azure-lt text-azure ${styles.registrarBadge}`}
-			title={registrarProviderName(provider)}
+			title={registrarProviderName(provider, specs)}
 		>
-			{registrarProviderName(provider)}
+			{registrarProviderName(provider, specs)}
 		</span>
 	);
 };
@@ -271,6 +261,8 @@ export default function Table({
 	onNew,
 }: Props) {
 	const columnHelper = createColumnHelper<DomainMonitor>();
+	const { data: providers } = useProviders();
+	const registrarSpecs: ProviderSpec[] = (providers || []).filter((item) => item.registrar);
 	const columns = useMemo(
 		() => [
 			columnHelper.accessor((row: DomainMonitor) => row, {
@@ -307,7 +299,7 @@ export default function Table({
 				id: "registrarProvider",
 				header: "域名商",
 				enableSorting: false,
-				cell: (info) => registrarProviderCell(info.getValue()),
+				cell: (info) => registrarProviderCell(info.getValue(), registrarSpecs),
 				meta: { className: `align-top ${styles.registrarColumn}` },
 			}),
 			columnHelper.accessor((row: DomainMonitor) => row, {
@@ -425,7 +417,7 @@ export default function Table({
 				meta: { className: `text-end ${styles.actionColumn}` },
 			}),
 		],
-		[columnHelper, onCheck, onRenew, canRenew, onEdit, onDisableToggle, onDelete],
+		[columnHelper, onCheck, onRenew, canRenew, onEdit, onDisableToggle, onDelete, registrarSpecs],
 	);
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const tableInstance = useReactTable<DomainMonitor>({

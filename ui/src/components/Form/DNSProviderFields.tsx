@@ -2,9 +2,10 @@ import { IconAlertTriangle } from "@tabler/icons-react";
 import { Field, useFormikContext } from "formik";
 import { useState } from "react";
 import Select, { type ActionMeta } from "react-select";
-import type { DNSProvider } from "src/api/backend";
+import type { DNSProvider, ProviderField } from "src/api/backend";
 import { useDnsProviders } from "src/hooks";
 import { intl, T } from "src/locale";
+import { ProviderCredentialFields } from "./ProviderCredentialFields";
 import styles from "./DNSProviderFields.module.css";
 
 interface DNSProviderOption {
@@ -14,38 +15,61 @@ interface DNSProviderOption {
 	readonly provider?: string;
 	readonly credentialId?: string;
 	readonly saved?: boolean;
+	readonly fields?: ProviderField[];
 }
 
 interface Props {
 	showBoundaryBox?: boolean;
 	optional?: boolean;
 }
+
+// 历史 meta 字段名：旧版本把单个密钥直接写进 meta，这里在编辑旧证书时回显。
+const legacySecretKeys: Record<string, string> = {
+	cf_token: "cfToken",
+	aliyun_key: "aliyunKey",
+	aliyun_secret: "aliyunSecret",
+	dnspod_token: "dnspodToken",
+	he_api_key: "heApiKey",
+};
+
 export function DNSProviderFields({ showBoundaryBox = false, optional = false }: Props) {
 	const { values, setFieldValue } = useFormikContext();
 	const { data: dnsProviders, isLoading } = useDnsProviders();
 	const [dnsProviderId, setDnsProviderId] = useState<string | null>(null);
 
 	const v: any = values || {};
+	const meta: any = v.meta || {};
+
+	// 从历史 meta 字段补齐密钥，保证旧证书仍能回显。
+	const legacySecrets: Record<string, string> = {};
+	for (const [key, metaKey] of Object.entries(legacySecretKeys)) {
+		const value = meta[metaKey];
+		if (typeof value === "string" && value) {
+			legacySecrets[key] = value;
+		}
+	}
+
+	const seedSecrets = (fields?: ProviderField[]) => {
+		const out: Record<string, string> = {};
+		for (const field of fields || []) {
+			if (legacySecrets[field.key]) {
+				out[field.key] = legacySecrets[field.key];
+			}
+		}
+		return out;
+	};
 
 	const handleChange = (newValue: any, _actionMeta: ActionMeta<DNSProviderOption>) => {
 		if (newValue?.credentialId) {
 			setFieldValue("meta.credentialId", newValue.credentialId);
 			setFieldValue("meta.dnsProvider", undefined);
 			setFieldValue("meta.dnsProviderCredentials", undefined);
-			setFieldValue("meta.cfToken", "");
-			setFieldValue("meta.aliyunKey", "");
-			setFieldValue("meta.aliyunSecret", "");
-			setFieldValue("meta.dnspodToken", "");
-			setFieldValue("meta.heApiKey", "");
+			setFieldValue("meta.credentialSecrets", undefined);
 		} else {
 			setFieldValue("meta.credentialId", undefined);
 			setFieldValue("meta.dnsProvider", newValue?.provider || newValue?.value);
 			setFieldValue("meta.dnsProviderCredentials", "");
-			setFieldValue("meta.cfToken", "");
-			setFieldValue("meta.aliyunKey", "");
-			setFieldValue("meta.aliyunSecret", "");
-			setFieldValue("meta.dnspodToken", "");
-			setFieldValue("meta.heApiKey", "");
+			setFieldValue("meta.credentialSecrets", seedSecrets(newValue?.fields));
 		}
 		setDnsProviderId(newValue?.value);
 	};
@@ -58,6 +82,7 @@ export function DNSProviderFields({ showBoundaryBox = false, optional = false }:
 			provider: p.provider || p.id,
 			credentialId: p.credentialId,
 			saved: p.saved,
+			fields: p.fields,
 		})) || [];
 	const selectedOption =
 		options.find((o) => o.credentialId && o.credentialId === (v.meta?.credentialId || v.meta?.credential_id)) ||
@@ -65,24 +90,25 @@ export function DNSProviderFields({ showBoundaryBox = false, optional = false }:
 		null;
 	const isSavedCredentialSelected = !!selectedOption?.credentialId || dnsProviderId?.startsWith("saved:");
 	const activeProvider = selectedOption?.provider || v.meta?.dnsProvider;
+	const activeFields = selectedOption?.fields;
+	const secretValues: Record<string, string> = {
+		...seedSecrets(activeFields),
+		...((meta.credentialSecrets as Record<string, string>) || {}),
+	};
 
-	const updateCredentialField = (field: string, value: string) => {
-		setFieldValue(`meta.${field}`, value);
-		const next = { ...(v.meta || {}), [field]: value };
-		if (activeProvider === "cloudflare") {
-			setFieldValue("meta.dnsProviderCredentials", `CLOUDFLARE_API_TOKEN=${next.cfToken || ""}`);
-		}
-		if (activeProvider === "alidns") {
-			setFieldValue(
-				"meta.dnsProviderCredentials",
-				`ALICLOUD_ACCESS_KEY=${next.aliyunKey || ""}\nALICLOUD_SECRET_KEY=${next.aliyunSecret || ""}`,
-			);
-		}
-		if (activeProvider === "dnspod") {
-			setFieldValue("meta.dnsProviderCredentials", `DNSPOD_TOKEN=${next.dnspodToken || ""}`);
-		}
-		if (activeProvider === "he") {
-			setFieldValue("meta.dnsProviderCredentials", `HE_API_KEY=${next.heApiKey || ""}`);
+	// 按字段 schema 生成后端凭据文本（KEY=VALUE），与历史 dns_provider_credentials 契约一致。
+	const buildCredentialsText = (fields: ProviderField[], secrets: Record<string, string>) => {
+		return fields
+			.map((field) => (field.env_name ? `${field.env_name}=${secrets[field.key] || ""}` : ""))
+			.filter((line) => line !== "")
+			.join("\n");
+	};
+
+	const updateCredentialField = (key: string, value: string) => {
+		const next = { ...secretValues, [key]: value };
+		setFieldValue("meta.credentialSecrets", next);
+		if (activeFields) {
+			setFieldValue("meta.dnsProviderCredentials", buildCredentialsText(activeFields, next));
 		}
 	};
 
@@ -121,83 +147,12 @@ export function DNSProviderFields({ showBoundaryBox = false, optional = false }:
 
 			{activeProvider && !isSavedCredentialSelected ? (
 				<>
-					{activeProvider === "cloudflare" ? (
-						<div className="mt-3">
-							<label htmlFor="cfToken" className="form-label">
-								Cloudflare API Token
-							</label>
-							<input
-								id="cfToken"
-								type="password"
-								className="form-control"
-								autoComplete="off"
-								value={v.meta?.cfToken || ""}
-								onChange={(event) => updateCredentialField("cfToken", event.target.value)}
-							/>
-						</div>
-					) : null}
-					{activeProvider === "alidns" ? (
-						<div className="row mt-3">
-							<div className="col-md-6">
-								<label htmlFor="aliyunKey" className="form-label">
-									AccessKey ID
-								</label>
-								<input
-									id="aliyunKey"
-									type="text"
-									className="form-control"
-									autoComplete="off"
-									value={v.meta?.aliyunKey || ""}
-									onChange={(event) => updateCredentialField("aliyunKey", event.target.value)}
-								/>
-							</div>
-							<div className="col-md-6">
-								<label htmlFor="aliyunSecret" className="form-label">
-									AccessKey Secret
-								</label>
-								<input
-									id="aliyunSecret"
-									type="password"
-									className="form-control"
-									autoComplete="off"
-									value={v.meta?.aliyunSecret || ""}
-									onChange={(event) => updateCredentialField("aliyunSecret", event.target.value)}
-								/>
-							</div>
-						</div>
-					) : null}
-					{activeProvider === "dnspod" ? (
-						<div className="mt-3">
-							<label htmlFor="dnspodToken" className="form-label">
-								DNSPod Token
-							</label>
-							<input
-								id="dnspodToken"
-								type="password"
-								className="form-control"
-								autoComplete="off"
-								placeholder="APP_ID,APP_TOKEN"
-								value={v.meta?.dnspodToken || ""}
-								onChange={(event) => updateCredentialField("dnspodToken", event.target.value)}
-							/>
-							<small className="text-muted">APP_ID,APP_TOKEN</small>
-						</div>
-					) : null}
-					{activeProvider === "he" ? (
-						<div className="mt-3">
-							<label htmlFor="heApiKey" className="form-label">
-								Hurricane Electric API Key
-							</label>
-							<input
-								id="heApiKey"
-								type="password"
-								className="form-control"
-								autoComplete="off"
-								value={v.meta?.heApiKey || ""}
-								onChange={(event) => updateCredentialField("heApiKey", event.target.value)}
-							/>
-						</div>
-					) : null}
+					<ProviderCredentialFields
+						fields={activeFields}
+						values={secretValues}
+						idPrefix="certificateDns"
+						onChange={updateCredentialField}
+					/>
 					<div>
 						<small className="text-danger">
 							<T id="certificates.dns.credentials-warning" />

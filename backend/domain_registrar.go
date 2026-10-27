@@ -53,9 +53,10 @@ type domainRenewResult struct {
 	Error         string `json:"error,omitempty"`
 }
 
+// domainMonitorRegistrarHostedZones 返回全部托管/免费二级域后缀（含环境变量追加项）。
+// 后缀清单来自 providers.go 注册表的 HostedZones。
 func domainMonitorRegistrarHostedZones() []string {
-	out := append([]string{}, digitalPlatHostedZones...)
-	out = append(out, dnsheHostedZones...)
+	out := append([]string{}, providerHostedZones()...)
 	out = append(out, unmanagedHostedZones...)
 	for _, suffix := range strings.FieldsFunc(os.Getenv("DOMAIN_MONITOR_HOSTED_ZONES"), func(r rune) bool {
 		return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == ';'
@@ -68,42 +69,30 @@ func domainMonitorRegistrarHostedZones() []string {
 	return out
 }
 
+// domainMonitorRegistrarProvider 按托管后缀判断域名所属域名商。
 func domainMonitorRegistrarProvider(domain string) string {
 	domain = normalizedDomainMonitorHost(domain)
-	for _, suffix := range digitalPlatHostedZones {
-		suffix = strings.Trim(strings.ToLower(strings.TrimSpace(suffix)), ".")
-		if domain == suffix || strings.HasSuffix(domain, "."+suffix) {
-			return "digitalplat"
-		}
-	}
-	for _, suffix := range dnsheHostedZones {
-		suffix = strings.Trim(strings.ToLower(strings.TrimSpace(suffix)), ".")
-		if domain == suffix || strings.HasSuffix(domain, "."+suffix) {
-			return "dnshe"
+	for _, spec := range registrarProviderSpecs() {
+		for _, suffix := range spec.HostedZones {
+			suffix = strings.Trim(strings.ToLower(strings.TrimSpace(suffix)), ".")
+			if domain == suffix || strings.HasSuffix(domain, "."+suffix) {
+				return spec.ID
+			}
 		}
 	}
 	return ""
 }
 
+// normalizeDomainMonitorRegistrarProvider 归一化域名商名称，未识别时原样返回。
 func normalizeDomainMonitorRegistrarProvider(provider string) string {
 	raw := strings.TrimSpace(provider)
-	key := strings.ToLower(strings.NewReplacer(" ", "", "-", "", "_", "").Replace(raw))
-	switch key {
-	case "":
+	if raw == "" {
 		return ""
-	case "aliyun", "alidns", "alibabacloud", "aliyundns", "阿里云", "阿里云dns":
-		return "alidns"
-	case "digitalplat", "digitalplatform":
-		return "digitalplat"
-	case "dnshe":
-		return "dnshe"
-	case "cloudflare":
-		return "cloudflare"
-	case "dnspod":
-		return "dnspod"
-	default:
-		return raw
 	}
+	if spec := providerSpecByRegistrarAlias(raw); spec != nil {
+		return spec.ID
+	}
+	return raw
 }
 
 func inferDomainMonitorRegistrarProvider(domains []string) string {
@@ -131,15 +120,13 @@ func effectiveDomainMonitorRegistrarProvider(item npmDomainMonitor) string {
 	return inferDomainMonitorRegistrarProvider(item.DomainNames)
 }
 
+// registrarCredentialValid 判断凭据是否属于该域名商且必填密钥齐备。
 func registrarCredentialValid(provider string, cred Credential) bool {
-	switch provider {
-	case "digitalplat":
-		return cred.Provider == "digitalplat" && strings.TrimSpace(cred.DigitalPlatAPIKey) != ""
-	case "dnshe":
-		return cred.Provider == "dnshe" && strings.TrimSpace(cred.DNSHEAPIKey) != "" && strings.TrimSpace(cred.DNSHEAPISecret) != ""
-	default:
+	spec := providerSpecByID(provider)
+	if spec == nil || !spec.Registrar || spec.ID != cred.Provider {
 		return false
 	}
+	return credentialIsComplete(cred)
 }
 
 func domainRegistrarCredentialForDomainMonitor(provider string, credentialID string) (Credential, bool, error) {
@@ -177,15 +164,9 @@ func domainRegistrarCredentialForDomainMonitor(provider string, credentialID str
 	return matches[0], true, nil
 }
 
+// domainRegistrarProviderName 域名商展示名。
 func domainRegistrarProviderName(provider string) string {
-	switch provider {
-	case "digitalplat":
-		return "DigitalPlat"
-	case "dnshe":
-		return "DNSHE"
-	default:
-		return provider
-	}
+	return providerDisplayName(provider)
 }
 
 func dnsheBaseURL() string {
@@ -315,35 +296,57 @@ func fetchDNSHEDomainExpiry(domain string, cred Credential) (time.Time, error) {
 	return expiresAt, nil
 }
 
-func renewDNSHEDomain(domain string, credentialID string) (domainRenewResult, error) {
+// renewRegisteredDomain 按域名商注册表续期：provider 由托管后缀推断，
+// 续期实现来自 providers.go 的 spec.renewDomain。
+func renewRegisteredDomain(domain string, credentialID string) (domainRenewResult, error) {
 	domain = normalizedDomainMonitorHost(domain)
 	registeredDomain, hostedZone, err := domainMonitorRegisteredDomain(domain)
 	if err != nil {
 		return domainRenewResult{Domain: domain, Status: "error", Error: err.Error()}, err
 	}
-	if !hostedZone || domainMonitorRegistrarProvider(registeredDomain) != "dnshe" {
-		err := errors.New("该域名不支持 DNSHE 续期")
-		return domainRenewResult{Domain: registeredDomain, Provider: domainMonitorRegistrarProvider(registeredDomain), Status: "error", Error: err.Error()}, err
+	provider := ""
+	if hostedZone {
+		provider = domainMonitorRegistrarProvider(registeredDomain)
 	}
-	cred, ok, err := domainRegistrarCredentialForDomainMonitor("dnshe", credentialID)
+	spec := providerSpecByID(provider)
+	if spec == nil || !spec.Renewable || spec.renewDomain == nil {
+		message := "该域名不支持续期"
+		if name := domainRegistrarProviderName(provider); name != "" {
+			message = fmt.Sprintf("该域名不支持 %s 续期", name)
+		}
+		err := errors.New(message)
+		return domainRenewResult{Domain: registeredDomain, Provider: provider, Status: "error", Error: err.Error()}, err
+	}
+	cred, ok, err := domainRegistrarCredentialForDomainMonitor(spec.ID, credentialID)
 	if err != nil {
-		return domainRenewResult{Domain: registeredDomain, Provider: "dnshe", Status: "error", Error: err.Error()}, err
+		return domainRenewResult{Domain: registeredDomain, Provider: spec.ID, Status: "error", Error: err.Error()}, err
 	}
 	if !ok {
 		err := errDomainRegistrationExpiryUnavailable
-		return domainRenewResult{Domain: registeredDomain, Provider: "dnshe", Status: "error", Error: err.Error()}, err
+		return domainRenewResult{Domain: registeredDomain, Provider: spec.ID, Status: "error", Error: err.Error()}, err
 	}
-	record, err := fetchDNSHEDomainRecord(registeredDomain, cred)
+	return spec.renewDomain(registeredDomain, cred)
+}
+
+// renewDNSHEDomain 保留的历史入口，等价于按域名商注册表续期。
+func renewDNSHEDomain(domain string, credentialID string) (domainRenewResult, error) {
+	return renewRegisteredDomain(domain, credentialID)
+}
+
+// renewDNSHEDomainWithCred 使用已解析的凭据执行 DNSHE 续期。
+func renewDNSHEDomainWithCred(domain string, cred Credential) (domainRenewResult, error) {
+	domain = normalizedDomainMonitorHost(domain)
+	record, err := fetchDNSHEDomainRecord(domain, cred)
 	if err != nil {
-		return domainRenewResult{Domain: registeredDomain, Provider: "dnshe", Status: "error", Error: err.Error()}, err
+		return domainRenewResult{Domain: domain, Provider: "dnshe", Status: "error", Error: err.Error()}, err
 	}
 	requestURL := dnsheRequestURL("subdomains", "renew", nil)
 	var payload dnsheRenewResponse
 	if err := dnsheAPIRequest(http.MethodPost, requestURL, cred, map[string]any{"subdomain_id": record.ID}, &payload); err != nil {
-		return domainRenewResult{Domain: registeredDomain, Provider: "dnshe", Status: "error", Error: err.Error()}, err
+		return domainRenewResult{Domain: domain, Provider: "dnshe", Status: "error", Error: err.Error()}, err
 	}
 	result := domainRenewResult{
-		Domain:        registeredDomain,
+		Domain:        domain,
 		Provider:      "dnshe",
 		Status:        "ok",
 		OldExpiresOn:  payload.OldExpiresAt,
@@ -406,7 +409,7 @@ func renewDomainMonitorItem(w http.ResponseWriter, r *http.Request, id int) {
 		hadError := false
 		for _, domain := range domains {
 			host, _ := domainMonitorEndpoint(domain)
-			result, renewErr := renewDNSHEDomain(host, items[i].CredentialID)
+			result, renewErr := renewRegisteredDomain(host, items[i].CredentialID)
 			if renewErr != nil {
 				hadError = true
 				notifyDomainRenewFailed(result.Domain, renewErr.Error())

@@ -1,4 +1,4 @@
-import { IconEye, IconEyeOff, IconHelp, IconPlus } from "@tabler/icons-react";
+import { IconHelp, IconPlus } from "@tabler/icons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Alert from "react-bootstrap/Alert";
@@ -6,6 +6,7 @@ import Modal from "react-bootstrap/Modal";
 import {
 	type CredentialDetail,
 	type CredentialSummary,
+	type ProviderSpec,
 	createCredential,
 	deleteCredential,
 	getCredential,
@@ -13,10 +14,12 @@ import {
 	updateCredential,
 } from "src/api/backend";
 import { Button, LoadingPage, useLocalPagination } from "src/components";
+import { ProviderCredentialFields } from "src/components/Form/ProviderCredentialFields";
 import { showHelpModal } from "src/modals";
 import { ConfirmDiscardModal } from "src/modals/ConfirmDiscardModal";
 import { showError, showSuccess } from "src/notifications";
 import { useConfirmClose } from "src/hooks/useConfirmClose";
+import { useProviders } from "src/hooks/useProviders";
 
 const emptyCredential: CredentialDetail = {
 	id: "",
@@ -24,81 +27,46 @@ const emptyCredential: CredentialDetail = {
 	provider: "digitalplat",
 	hasSecret: false,
 	usageCount: 0,
-	aliyunKey: "",
-	aliyunSecret: "",
-	cfToken: "",
-	dnspodToken: "",
-	heApiKey: "",
-	digitalPlatApiKey: "",
-	dnsheApiKey: "",
-	dnsheApiSecret: "",
+	secrets: {},
 };
 
-const providerOptions = [
-	{ value: "digitalplat", label: "DigitalPlat" },
-	{ value: "dnshe", label: "DNSHE" },
-	{ value: "alidns", label: "阿里云 DNS" },
-	{ value: "cloudflare", label: "Cloudflare" },
-	{ value: "dnspod", label: "DNSPod" },
-	{ value: "he", label: "Hurricane Electric" },
-];
+// 类型选项与字段 schema 全部由后端 provider 注册表下发（见 useProviders），
+// 新增 provider 时前端无需改动。
+const providerOptionsOf = (providers: ProviderSpec[]) =>
+	providers.map((item) => ({ value: item.id, label: item.name }));
 
-const providerName = (provider: string) => providerOptions.find((item) => item.value === provider)?.label || provider;
+const providerNameOf = (provider: string, providers: ProviderSpec[]) =>
+	providers.find((item) => item.id === provider)?.name || provider;
 
-interface SecretInputProps {
-	id: string;
-	value: string;
-	visible: boolean;
-	onChange: (value: string) => void;
-	onToggle: () => void;
-}
-
-function SecretInput({ id, value, visible, onChange, onToggle }: SecretInputProps) {
-	return (
-		<div className="input-group">
-			<input
-				id={id}
-				className="form-control"
-				type={visible ? "text" : "password"}
-				value={value}
-				onChange={(event) => onChange(event.target.value)}
-			/>
-			<button
-				type="button"
-				className="btn btn-icon"
-				aria-label={visible ? "隐藏明文" : "显示明文"}
-				title={visible ? "隐藏明文" : "显示明文"}
-				onClick={onToggle}
-			>
-				{visible ? <IconEyeOff size={18} /> : <IconEye size={18} />}
-			</button>
-		</div>
-	);
-}
+// 取某个 provider 的字段 schema，供表单渲染。
+const providerFieldsOf = (provider: string, providers: ProviderSpec[]) => {
+	return providers.find((item) => item.id === provider)?.fields;
+};
 
 const credentialPayload = (draft: CredentialDetail): CredentialDetail => {
-	const base = {
-		...emptyCredential,
+	const secrets: Record<string, string> = {};
+	for (const [key, value] of Object.entries(draft.secrets || {})) {
+		if (value) {
+			secrets[key] = value;
+		}
+	}
+	return {
 		id: draft.id,
 		name: draft.name.trim(),
 		provider: draft.provider,
 		hasSecret: draft.hasSecret,
 		usageCount: draft.usageCount,
+		secrets: Object.keys(secrets).length ? secrets : undefined,
+		// 历史类型化字段不再提交：后端以 secrets 为准回填，避免出现重复存储。
+		aliyunKey: undefined,
+		aliyunSecret: undefined,
+		cfToken: undefined,
+		dnspodToken: undefined,
+		heApiKey: undefined,
+		digitalPlatApiKey: undefined,
+		dnsheApiKey: undefined,
+		dnsheApiSecret: undefined,
 	};
-	switch (draft.provider) {
-		case "alidns":
-			return { ...base, aliyunKey: draft.aliyunKey || "", aliyunSecret: draft.aliyunSecret || "" };
-		case "cloudflare":
-			return { ...base, cfToken: draft.cfToken || "" };
-		case "dnspod":
-			return { ...base, dnspodToken: draft.dnspodToken || "" };
-		case "he":
-			return { ...base, heApiKey: draft.heApiKey || "" };
-		case "dnshe":
-			return { ...base, dnsheApiKey: draft.dnsheApiKey || "", dnsheApiSecret: draft.dnsheApiSecret || "" };
-		default:
-			return { ...base, digitalPlatApiKey: draft.digitalPlatApiKey || "" };
-	}
 };
 
 export default function CredentialsSettingsPage() {
@@ -122,6 +90,9 @@ export default function CredentialsSettingsPage() {
 		queryKey: ["credentials"],
 		queryFn: getCredentials,
 	});
+	// provider 类型选项与字段 schema 全部来自后端注册表。
+	const { data: providers } = useProviders();
+	const providerList = providers || [];
 	const credentials = data || [];
 	const { pageItems: credentialPageItems, pagination: credentialPagination } = useLocalPagination(credentials);
 
@@ -131,6 +102,7 @@ export default function CredentialsSettingsPage() {
 	const refresh = () => {
 		queryClient.invalidateQueries({ queryKey: ["credentials"] });
 		queryClient.invalidateQueries({ queryKey: ["dns-providers"] });
+		queryClient.invalidateQueries({ queryKey: ["providers"] });
 	};
 	const updateDraft = (key: keyof CredentialDetail, value: any) => {
 		dirtyRef.current = true;
@@ -138,16 +110,35 @@ export default function CredentialsSettingsPage() {
 	};
 	const openNew = () => {
 		dirtyRef.current = false;
-		setDraft(emptyCredential);
+		setDraft({
+			...emptyCredential,
+			fields: providerFieldsOf(emptyCredential.provider, providerList),
+		});
 		setVisibleSecrets({});
 		setShowForm(true);
 	};
 	const toggleSecret = (key: string) => setVisibleSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
 
+	// 切换类型时清空密钥并按新类型的 schema 渲染字段。
+	const selectProvider = (provider: string) => {
+		dirtyRef.current = true;
+		setDraft((prev) => ({
+			...prev,
+			provider,
+			secrets: {},
+			fields: providerFieldsOf(provider, providerList),
+		}));
+		setVisibleSecrets({});
+	};
+
 	const edit = async (id: string) => {
 		setLoadingID(id);
 		try {
-			setDraft(await getCredential(id));
+			const detail = await getCredential(id);
+			setDraft({
+				...detail,
+				fields: detail.fields || providerFieldsOf(detail.provider, providerList),
+			});
 			setVisibleSecrets({});
 			dirtyRef.current = false;
 			setShowForm(true);
@@ -193,120 +184,14 @@ export default function CredentialsSettingsPage() {
 	};
 
 	const providerFields = (
-		<>
-			{draft.provider === "alidns" ? (
-				<>
-					<div className="col-md-6">
-						<label className="form-label" htmlFor="credentialAliyunKey">
-							AccessKey ID
-						</label>
-						<input
-							id="credentialAliyunKey"
-							className="form-control"
-							value={draft.aliyunKey || ""}
-							onChange={(event) => updateDraft("aliyunKey", event.target.value)}
-						/>
-					</div>
-					<div className="col-md-6">
-						<label className="form-label" htmlFor="credentialAliyunSecret">
-							AccessKey Secret
-						</label>
-						<SecretInput
-							id="credentialAliyunSecret"
-							value={draft.aliyunSecret || ""}
-							visible={!!visibleSecrets.aliyunSecret}
-							onChange={(value) => updateDraft("aliyunSecret", value)}
-							onToggle={() => toggleSecret("aliyunSecret")}
-						/>
-					</div>
-				</>
-			) : null}
-			{draft.provider === "cloudflare" ? (
-				<div className="col-md-12">
-					<label className="form-label" htmlFor="credentialCFToken">
-						API Token
-					</label>
-					<SecretInput
-						id="credentialCFToken"
-						value={draft.cfToken || ""}
-						visible={!!visibleSecrets.cfToken}
-						onChange={(value) => updateDraft("cfToken", value)}
-						onToggle={() => toggleSecret("cfToken")}
-					/>
-				</div>
-			) : null}
-			{draft.provider === "dnspod" ? (
-				<div className="col-md-12">
-					<label className="form-label" htmlFor="credentialDNSPodToken">
-						DNSPod Token
-					</label>
-					<SecretInput
-						id="credentialDNSPodToken"
-						value={draft.dnspodToken || ""}
-						visible={!!visibleSecrets.dnspodToken}
-						onChange={(value) => updateDraft("dnspodToken", value)}
-						onToggle={() => toggleSecret("dnspodToken")}
-					/>
-					<small className="text-muted">格式：APP_ID,APP_TOKEN</small>
-				</div>
-			) : null}
-			{draft.provider === "he" ? (
-				<div className="col-md-12">
-					<label className="form-label" htmlFor="credentialHEApiKey">
-						Hurricane Electric API Key
-					</label>
-					<SecretInput
-						id="credentialHEApiKey"
-						value={draft.heApiKey || ""}
-						visible={!!visibleSecrets.heApiKey}
-						onChange={(value) => updateDraft("heApiKey", value)}
-						onToggle={() => toggleSecret("heApiKey")}
-					/>
-				</div>
-			) : null}
-			{draft.provider === "digitalplat" ? (
-				<div className="col-md-12">
-					<label className="form-label" htmlFor="credentialDigitalPlatApiKey">
-						API Key
-					</label>
-					<SecretInput
-						id="credentialDigitalPlatApiKey"
-						value={draft.digitalPlatApiKey || ""}
-						visible={!!visibleSecrets.digitalPlatApiKey}
-						onChange={(value) => updateDraft("digitalPlatApiKey", value)}
-						onToggle={() => toggleSecret("digitalPlatApiKey")}
-					/>
-				</div>
-			) : null}
-			{draft.provider === "dnshe" ? (
-				<>
-					<div className="col-md-6">
-						<label className="form-label" htmlFor="credentialDNSHEApiKey">
-							API Key
-						</label>
-						<SecretInput
-							id="credentialDNSHEApiKey"
-							value={draft.dnsheApiKey || ""}
-							visible={!!visibleSecrets.dnsheApiKey}
-							onChange={(value) => updateDraft("dnsheApiKey", value)}
-							onToggle={() => toggleSecret("dnsheApiKey")}
-						/>
-					</div>
-					<div className="col-md-6">
-						<label className="form-label" htmlFor="credentialDNSHEApiSecret">
-							API Secret
-						</label>
-						<SecretInput
-							id="credentialDNSHEApiSecret"
-							value={draft.dnsheApiSecret || ""}
-							visible={!!visibleSecrets.dnsheApiSecret}
-							onChange={(value) => updateDraft("dnsheApiSecret", value)}
-							onToggle={() => toggleSecret("dnsheApiSecret")}
-						/>
-					</div>
-				</>
-			) : null}
-		</>
+		<ProviderCredentialFields
+			fields={draft.fields}
+			values={draft.secrets}
+			visibleSecrets={visibleSecrets}
+			onToggleSecret={toggleSecret}
+			idPrefix="credential"
+			onChange={(key: string, value: string) => updateDraft("secrets", { ...draft.secrets, [key]: value })}
+		/>
 	);
 
 	return (
@@ -360,9 +245,9 @@ export default function CredentialsSettingsPage() {
 								id="credentialProvider"
 								className="form-select"
 								value={draft.provider}
-								onChange={(event) => updateDraft("provider", event.target.value)}
+								onChange={(event) => selectProvider(event.target.value)}
 							>
-								{providerOptions.map((item) => (
+								{providerOptionsOf(providerList).map((item) => (
 									<option value={item.value} key={item.value}>
 										{item.label}
 									</option>
@@ -400,7 +285,7 @@ export default function CredentialsSettingsPage() {
 									<div className="fw-semibold">{item.name}</div>
 									<div className="text-muted small">{item.id}</div>
 								</td>
-								<td>{providerName(item.provider)}</td>
+								<td>{providerNameOf(item.provider, providerList)}</td>
 								<td>{item.hasSecret ? "已配置密钥" : "未配置密钥"}</td>
 								<td>{item.usageCount ? `${item.usageCount} 处引用` : "未引用"}</td>
 								<td>

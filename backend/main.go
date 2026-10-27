@@ -92,6 +92,10 @@ var (
 	domainMonitorAPITimeout   = 8 * time.Second
 	digitalPlatAPIBaseURL     = "https://domain-api.digitalplat.org/api/v1"
 	dnsheAPIBaseURL           = "https://api005.dnshe.com/index.php?m=domain_hub"
+	porkbunAPIBaseURL         = "https://api.porkbun.com/api/json/v3"
+	// cloudflareRegistrarAPIBaseURL 是 Cloudflare Registrar API（域名商侧，非 DNS 侧）。
+	// 与 cloudflareAPIBaseURL 同 host，但走 registrar 子路径。
+	cloudflareRegistrarAPIBaseURL = "https://api.cloudflare.com/client/v4"
 	// ddnsAPITimeout 是后端主动调用 DNS 提供商 API（HE DDNS 等）的超时。
 	// 国内网络访问境外 API 偶发慢连接，8s 偏紧，放宽到 20s，
 	// 重试一次后总耗时仍在刷新循环可接受范围内。
@@ -110,20 +114,24 @@ var errDomainRegistrationExpiryUnavailable = errors.New("域名注册到期信�
 
 // Credential 一条可复用凭据。同一 provider 允许多条（多账号）。
 type Credential struct {
-	ID                string       `json:"id"`
-	CreatedOn         string       `json:"created_on,omitempty"`
-	ModifiedOn        string       `json:"modified_on,omitempty"`
-	Name              string       `json:"name"`
-	Provider          string       `json:"provider"` // alidns | cloudflare | dnspod | he | digitalplat | dnshe
-	AliyunKey         string       `json:"aliyun_key,omitempty"`
-	AliyunSecret      string       `json:"aliyun_secret,omitempty"`
-	CFToken           string       `json:"cf_token,omitempty"`
-	DNSPodToken       string       `json:"dnspod_token,omitempty"`
-	HEAPIKey          string       `json:"he_api_key,omitempty"`
-	DigitalPlatAPIKey string       `json:"digital_plat_api_key,omitempty"`
-	DNSHEAPIKey       string       `json:"dnshe_api_key,omitempty"`
-	DNSHEAPISecret    string       `json:"dnshe_api_secret,omitempty"`
-	Issuer            IssuerConfig `json:"issuer,omitempty"`
+	ID                string `json:"id"`
+	CreatedOn         string `json:"created_on,omitempty"`
+	ModifiedOn        string `json:"modified_on,omitempty"`
+	Name              string `json:"name"`
+	Provider          string `json:"provider"` // alidns | cloudflare | dnspod | he | digitalplat | dnshe
+	AliyunKey         string `json:"aliyun_key,omitempty"`
+	AliyunSecret      string `json:"aliyun_secret,omitempty"`
+	CFToken           string `json:"cf_token,omitempty"`
+	DNSPodToken       string `json:"dnspod_token,omitempty"`
+	HEAPIKey          string `json:"he_api_key,omitempty"`
+	DigitalPlatAPIKey string `json:"digital_plat_api_key,omitempty"`
+	DNSHEAPIKey       string `json:"dnshe_api_key,omitempty"`
+	DNSHEAPISecret    string `json:"dnshe_api_secret,omitempty"`
+	// Secrets 保存新增 provider 的密钥（键为 providerField.Key）。
+	// 历史 provider 仍使用上面的类型化字段，读写统一走 providers.go 的
+	// credentialSecretValue / credentialSetSecret，因此不影响已有配置文件。
+	Secrets map[string]string `json:"secrets,omitempty"`
+	Issuer  IssuerConfig      `json:"issuer,omitempty"`
 }
 
 type IssuerConfig struct {
@@ -515,6 +523,18 @@ func main() {
 		log.Printf("warn: startup migrate failed: %v", err)
 	}
 
+	mux := newAPIMux()
+
+	log.Printf("caddy-api listening on %s", listen)
+	go listenCaddyLogs()
+	go listenDDNSLogs()
+	go runDynamicDNSStatusLoop()
+	go runDomainMonitorLoop()
+	log.Fatal(http.ListenAndServe(listen, mux))
+}
+
+// newAPIMux 创建并注册全部 HTTP 路由。
+func newAPIMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sites", listSites)
 	mux.HandleFunc("/sites/", siteHandler)
@@ -542,6 +562,7 @@ func main() {
 	mux.HandleFunc("/caddy/certificates", npmCertificatesHandler)
 	mux.HandleFunc("/caddy/certificates/authorities", npmCertificateAuthoritiesHandler)
 	mux.HandleFunc("/caddy/certificates/dns-providers", npmDNSProvidersHandler)
+	mux.HandleFunc("/caddy/providers", npmProvidersHandler)
 	mux.HandleFunc("/caddy/certificates/test-http", npmTestHTTPCertificateHandler)
 	mux.HandleFunc("/caddy/certificates/validate", npmValidateCertificateHandler)
 	mux.HandleFunc("/caddy/certificates/", npmCertificateItemHandler)
@@ -576,6 +597,7 @@ func main() {
 	mux.HandleFunc("/nginx/certificates", npmCertificatesHandler)
 	mux.HandleFunc("/nginx/certificates/authorities", npmCertificateAuthoritiesHandler)
 	mux.HandleFunc("/nginx/certificates/dns-providers", npmDNSProvidersHandler)
+	mux.HandleFunc("/nginx/providers", npmProvidersHandler)
 	mux.HandleFunc("/nginx/certificates/test-http", npmTestHTTPCertificateHandler)
 	mux.HandleFunc("/nginx/certificates/validate", npmValidateCertificateHandler)
 	mux.HandleFunc("/nginx/certificates/", npmCertificateItemHandler)
@@ -603,13 +625,7 @@ func main() {
 	mux.HandleFunc("/nginx/notifications/channels/", notificationChannelItemHandler)
 	mux.HandleFunc("/audit-log", npmEmptyListHandler)
 	mux.HandleFunc("/version/check", npmVersionCheckHandler)
-
-	log.Printf("caddy-api listening on %s", listen)
-	go listenCaddyLogs()
-	go listenDDNSLogs()
-	go runDynamicDNSStatusLoop()
-	go runDomainMonitorLoop()
-	log.Fatal(http.ListenAndServe(listen, mux))
+	return mux
 }
 
 func applyEnvOverrides() {
@@ -790,48 +806,19 @@ func findCredential(id string, creds []Credential) (Credential, bool) {
 	return Credential{}, false
 }
 
+// credContentEqual 比较两条凭据的提供商与全部字段，字段定义见 providers.go。
 func credContentEqual(a, b Credential) bool {
-	if a.Provider != b.Provider {
-		return false
-	}
-	switch a.Provider {
-	case "alidns":
-		return a.AliyunKey == b.AliyunKey && a.AliyunSecret == b.AliyunSecret
-	case "cloudflare":
-		return a.CFToken == b.CFToken
-	case "dnspod":
-		return a.DNSPodToken == b.DNSPodToken
-	case "he":
-		return a.HEAPIKey == b.HEAPIKey
-	case "digitalplat":
-		return a.DigitalPlatAPIKey == b.DigitalPlatAPIKey
-	case "dnshe":
-		return a.DNSHEAPIKey == b.DNSHEAPIKey && a.DNSHEAPISecret == b.DNSHEAPISecret
-	}
-	return false
+	return credContentEqualBySpec(a, b)
 }
 
+// isDNSCredentialProvider 是否可作为 DNS（ACME DNS-01）凭据。
 func isDNSCredentialProvider(provider string) bool {
-	return provider == "alidns" || provider == "cloudflare" || provider == "dnspod" || provider == "he"
+	return providerIsDNSCredential(provider)
 }
 
+// dnsProviderDisplayName 展示名，未知 provider 原样返回。
 func dnsProviderDisplayName(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "alidns":
-		return "阿里云 DNS"
-	case "cloudflare":
-		return "Cloudflare"
-	case "dnspod":
-		return "DNSPod.cn"
-	case "he":
-		return "Hurricane Electric"
-	case "digitalplat":
-		return "DigitalPlat"
-	case "dnshe":
-		return "DNSHE"
-	default:
-		return strings.TrimSpace(provider)
-	}
+	return providerDisplayName(provider)
 }
 
 func dnsProviderForCredentialID(credentialID string, creds []Credential) string {
@@ -852,6 +839,12 @@ func dnsCredentials(creds []Credential) []Credential {
 }
 
 func credentialHasSecret(c Credential) bool {
+	for _, f := range credentialFields(c.Provider) {
+		if strings.TrimSpace(credentialSecretValue(c, f.Key)) != "" {
+			return true
+		}
+	}
+	// 未知 provider 或历史遗留字段：保持原有「任一字段非空即为有密钥」的判断。
 	return c.AliyunKey != "" || c.AliyunSecret != "" || c.CFToken != "" || c.DNSPodToken != "" || c.HEAPIKey != "" || c.DigitalPlatAPIKey != "" || c.DNSHEAPIKey != "" || c.DNSHEAPISecret != ""
 }
 
@@ -869,35 +862,7 @@ func validateCredential(c Credential) error {
 }
 
 func validateCredentialSecret(c Credential) error {
-	switch c.Provider {
-	case "alidns":
-		if c.AliyunKey == "" || c.AliyunSecret == "" {
-			return errors.New("阿里云 DNS 需要 AccessKey ID 与 Secret")
-		}
-	case "cloudflare":
-		if c.CFToken == "" {
-			return errors.New("Cloudflare 需要 API Token")
-		}
-	case "dnspod":
-		if c.DNSPodToken == "" {
-			return errors.New("DNSPod 需要 API Token，格式为 APP_ID,APP_TOKEN")
-		}
-	case "he":
-		if strings.TrimSpace(c.HEAPIKey) == "" {
-			return errors.New("Hurricane Electric 需要 API Key")
-		}
-	case "digitalplat":
-		if strings.TrimSpace(c.DigitalPlatAPIKey) == "" {
-			return errors.New("DigitalPlat 需要 API Key")
-		}
-	case "dnshe":
-		if strings.TrimSpace(c.DNSHEAPIKey) == "" || strings.TrimSpace(c.DNSHEAPISecret) == "" {
-			return errors.New("DNSHE 需要 API Key 和 API Secret")
-		}
-	default:
-		return fmt.Errorf("未知提供商：%s", c.Provider)
-	}
-	return nil
+	return validateCredentialSecretBySpec(c)
 }
 
 type certificateAuthority struct {
@@ -1228,6 +1193,8 @@ func credentialsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// 前端可以统一提交 secrets，历史类型化字段在这里回填。
+		credentialApplySecrets(&c)
 		if err := validateCredential(c); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -1291,6 +1258,8 @@ func credentialItemHandler(w http.ResponseWriter, r *http.Request) {
 			"digital_plat_api_key": c.DigitalPlatAPIKey,
 			"dnshe_api_key":        c.DNSHEAPIKey,
 			"dnshe_api_secret":     c.DNSHEAPISecret,
+			"fields":               providerFieldViews(c.Provider),
+			"secrets":              credentialSecrets(c),
 		})
 	case http.MethodPut:
 		var c Credential
@@ -1298,6 +1267,8 @@ func credentialItemHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// 前端可以统一提交 secrets，历史类型化字段在这里回填。
+		credentialApplySecrets(&c)
 		c.ID = id
 		c.CreatedOn = creds[idx].CreatedOn
 		stampCredential(&c, "", true)
@@ -5361,7 +5332,10 @@ func renderTLSBlock(c Credential, issuer IssuerConfig, indent string) string {
 	} else {
 		fmt.Fprintf(&b, "%stls {\n", indent)
 	}
-	hasDNSProvider := c.Provider == "alidns" || c.Provider == "cloudflare" || c.Provider == "dnspod" || c.Provider == "he"
+	hasDNSProvider := false
+	if spec := providerSpecByID(c.Provider); spec != nil && spec.DNS && spec.renderACMEDNS != nil {
+		hasDNSProvider = true
+	}
 	if issuer.Provider == "internal" {
 		fmt.Fprintf(&b, "%s    issuer internal\n", indent)
 	} else if issuer.Provider == "auto" {
@@ -5376,20 +5350,8 @@ func renderTLSBlock(c Credential, issuer IssuerConfig, indent string) string {
 			fmt.Fprintf(&b, "%s    eab %s %s\n", indent, caddyQuote(issuer.EABKeyID), caddyQuote(issuer.EABMACKey))
 		}
 	}
-	switch c.Provider {
-	case "alidns":
-		fmt.Fprintf(&b, "%s    dns alidns {\n", indent)
-		fmt.Fprintf(&b, "%s        access_key_id %s\n", indent, caddyQuote(c.AliyunKey))
-		fmt.Fprintf(&b, "%s        access_key_secret %s\n", indent, caddyQuote(c.AliyunSecret))
-		fmt.Fprintf(&b, "%s    }\n", indent)
-	case "cloudflare":
-		fmt.Fprintf(&b, "%s    dns cloudflare %s\n", indent, caddyQuote(c.CFToken))
-	case "dnspod":
-		fmt.Fprintf(&b, "%s    dns dnspod %s\n", indent, caddyQuote(c.DNSPodToken))
-	case "he":
-		fmt.Fprintf(&b, "%s    dns he {\n", indent)
-		fmt.Fprintf(&b, "%s        api_key %s\n", indent, caddyQuote(c.HEAPIKey))
-		fmt.Fprintf(&b, "%s    }\n", indent)
+	if spec := providerSpecByID(c.Provider); spec != nil && spec.DNS && spec.renderACMEDNS != nil {
+		spec.renderACMEDNS(&b, indent, c)
 	}
 	if hasDNSProvider {
 		// 强制走公共递归 DNS 做 propagation check，避免 Docker embedded DNS 影响 SOA/NS 查询。
@@ -6398,11 +6360,14 @@ func reloadHandler(w http.ResponseWriter, r *http.Request) {
 
 var validateCaddyConfigExec = validateCaddyConfig
 
+// reloadCaddyFunc 是 reloadCaddy 的可覆盖版本，方便测试注入。
+var reloadCaddyFunc = reloadCaddy
+
 func validateAndReloadCaddy() error {
 	if err := validateCaddyConfigExec(); err != nil {
 		return err
 	}
-	return reloadCaddy()
+	return reloadCaddyFunc()
 }
 
 func validateCaddyConfig() error {
@@ -8203,36 +8168,30 @@ func createHTTPACMECertificateFromNPM(item npmCertificate) (npmCertificate, erro
 	}), nil
 }
 
+// npmProvidersHandler 返回全部 provider 的 schema（DNS 与域名商），供前端按表渲染表单。
+func npmProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, providerSpecViews())
+}
+
 func npmDNSProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	out := []map[string]any{
-		{
-			"id":          "alidns",
-			"name":        "阿里云 DNS",
-			"credentials": "ALICLOUD_ACCESS_KEY=<AccessKey ID>\nALICLOUD_SECRET_KEY=<AccessKey Secret>",
+	// 未保存的内置提供商：顺序与字段模板全部来自 providers.go 注册表。
+	out := []map[string]any{}
+	for _, spec := range dnsProviderSpecs() {
+		out = append(out, map[string]any{
+			"id":          spec.ID,
+			"name":        spec.Name,
+			"credentials": credentialTemplate(spec),
+			"fields":      providerFieldViews(spec.ID),
 			"saved":       false,
-		},
-		{
-			"id":          "cloudflare",
-			"name":        "Cloudflare",
-			"credentials": "CLOUDFLARE_API_TOKEN=<API Token>",
-			"saved":       false,
-		},
-		{
-			"id":          "dnspod",
-			"name":        "DNSPod.cn",
-			"credentials": "DNSPOD_TOKEN=<APP_ID,APP_TOKEN>",
-			"saved":       false,
-		},
-		{
-			"id":          "he",
-			"name":        "Hurricane Electric",
-			"credentials": "HE_API_KEY=<API Key>",
-			"saved":       false,
-		},
+		})
 	}
 	if creds, err := loadCredentials(); err == nil {
 		seen := map[string]int{}
@@ -8285,31 +8244,9 @@ func savedCredentialLabel(providerName string, count int, names []string, id str
 	return fmt.Sprintf("复用：%s #%s（%s）", providerName, id, suffix)
 }
 
+// credentialReuseKey 用于「复用凭据」分组，字段定义见 providers.go。
 func credentialReuseKey(c Credential) string {
-	switch c.Provider {
-	case "cloudflare":
-		if c.CFToken == "" {
-			return ""
-		}
-		return "cloudflare:" + c.CFToken
-	case "alidns":
-		if c.AliyunKey == "" || c.AliyunSecret == "" {
-			return ""
-		}
-		return "alidns:" + c.AliyunKey + ":" + c.AliyunSecret
-	case "dnspod":
-		if c.DNSPodToken == "" {
-			return ""
-		}
-		return "dnspod:" + c.DNSPodToken
-	case "he":
-		if c.HEAPIKey == "" {
-			return ""
-		}
-		return "he:" + c.HEAPIKey
-	default:
-		return ""
-	}
+	return credentialReuseKeyBySpec(c)
 }
 
 func npmCertificateAuthoritiesHandler(w http.ResponseWriter, r *http.Request) {
@@ -8510,39 +8447,6 @@ func createACMECertificateFromNPM(item npmCertificate) (npmCertificate, error) {
 		CredentialName: cred.Name,
 		IssuerConfig:   issuer,
 	}), nil
-}
-
-func credentialFromDNSProvider(provider, raw string) (Credential, error) {
-	values := parseCredentialLines(raw)
-	switch provider {
-	case "alidns":
-		key := firstNonEmpty(values["ALICLOUD_ACCESS_KEY"], values["ALICLOUD_ACCESS_KEY_ID"], values["ALIYUN_ACCESS_KEY_ID"])
-		secret := firstNonEmpty(values["ALICLOUD_SECRET_KEY"], values["ALICLOUD_ACCESS_KEY_SECRET"], values["ALIYUN_ACCESS_KEY_SECRET"])
-		if key == "" || secret == "" {
-			return Credential{}, errors.New("阿里云 DNS 需要 ALICLOUD_ACCESS_KEY 和 ALICLOUD_SECRET_KEY")
-		}
-		return Credential{Provider: "alidns", AliyunKey: key, AliyunSecret: secret}, nil
-	case "cloudflare":
-		token := firstNonEmpty(values["CLOUDFLARE_API_TOKEN"], values["CF_API_TOKEN"])
-		if token == "" {
-			return Credential{}, errors.New("Cloudflare 需要 CLOUDFLARE_API_TOKEN")
-		}
-		return Credential{Provider: "cloudflare", CFToken: token}, nil
-	case "dnspod":
-		token := firstNonEmpty(values["DNSPOD_TOKEN"], values["DNSPOD_API_TOKEN"], values["DNSPOD_LOGIN_TOKEN"])
-		if token == "" {
-			return Credential{}, errors.New("DNSPod 需要 DNSPOD_TOKEN，格式为 APP_ID,APP_TOKEN")
-		}
-		return Credential{Provider: "dnspod", DNSPodToken: token}, nil
-	case "he":
-		key := firstNonEmpty(values["HE_API_KEY"], values["HEDNS_API_KEY"], values["HURRICANE_ELECTRIC_API_KEY"])
-		if key == "" {
-			return Credential{}, errors.New("Hurricane Electric 需要 HE_API_KEY")
-		}
-		return Credential{Provider: "he", HEAPIKey: key}, nil
-	default:
-		return Credential{}, fmt.Errorf("不支持的 DNS 提供商：%s", provider)
-	}
 }
 
 func parseCredentialLines(raw string) map[string]string {
@@ -10775,22 +10679,12 @@ func renderDynamicDNSConfig(items []npmDynamicDNS, creds []Credential) (string, 
 			b.WriteString("\n")
 		}
 		b.WriteString("dynamic_dns {\n")
-		switch cred.Provider {
-		case "alidns":
-			fmt.Fprintf(&b, "    provider alidns {\n")
-			fmt.Fprintf(&b, "        access_key_id %s\n", caddyQuote(cred.AliyunKey))
-			fmt.Fprintf(&b, "        access_key_secret %s\n", caddyQuote(cred.AliyunSecret))
-			b.WriteString("    }\n")
-		case "cloudflare":
-			fmt.Fprintf(&b, "    provider cloudflare %s\n", caddyQuote(cred.CFToken))
-		case "dnspod":
-			fmt.Fprintf(&b, "    provider dnspod %s\n", caddyQuote(cred.DNSPodToken))
-		case "he":
-			fmt.Fprintf(&b, "    provider he {\n")
-			fmt.Fprintf(&b, "        api_key %s\n", caddyQuote(cred.HEAPIKey))
-			b.WriteString("    }\n")
-		default:
+		spec := providerSpecByID(cred.Provider)
+		if spec == nil || !spec.DDNS || spec.renderDDNS == nil {
 			return "", fmt.Errorf("动态 DNS %s 使用了不支持的 DNS 提供商：%s", item.Name, cred.Provider)
+		}
+		if err := spec.renderDDNS(&b, cred); err != nil {
+			return "", err
 		}
 		b.WriteString("    domains {\n")
 		for _, domain := range dynamicDNSDomains(item.DomainNames) {
@@ -10834,9 +10728,8 @@ func dynamicDNSCredentialForItem(item npmDynamicDNS, creds []Credential) (Creden
 	if !ok {
 		return Credential{}, fmt.Errorf("动态 DNS %s 使用的 DNS 凭据不存在", item.Name)
 	}
-	switch cred.Provider {
-	case "alidns", "cloudflare", "dnspod", "he":
-	default:
+	spec := providerSpecByID(cred.Provider)
+	if spec == nil || !spec.DDNS {
 		return Credential{}, fmt.Errorf("动态 DNS %s 使用了不支持的 DNS 提供商：%s", item.Name, cred.Provider)
 	}
 	if err := validateCredentialSecret(cred); err != nil {
@@ -11155,14 +11048,22 @@ func validateDomainMonitor(item npmDomainMonitor) error {
 		if !ok {
 			return errors.New("选择的域名商凭据不存在")
 		}
-		if cred.Provider != "digitalplat" && cred.Provider != "dnshe" {
-			return errors.New("域名监控只能选择 DigitalPlat 或 DNSHE 凭据")
+		if spec := providerSpecByID(cred.Provider); spec == nil || !spec.Registrar {
+			names := []string{}
+			for _, registrarSpec := range registrarProviderSpecs() {
+				names = append(names, registrarSpec.Name)
+			}
+			return fmt.Errorf("域名监控只能选择 %s 凭据", strings.Join(names, " 或 "))
 		}
-		if cred.Provider == "digitalplat" && strings.TrimSpace(cred.DigitalPlatAPIKey) == "" {
-			return errors.New("DigitalPlat 凭据缺少 API Key")
-		}
-		if cred.Provider == "dnshe" && (strings.TrimSpace(cred.DNSHEAPIKey) == "" || strings.TrimSpace(cred.DNSHEAPISecret) == "") {
-			return errors.New("DNSHE 凭据缺少 API Key 或 API Secret")
+		if !registrarCredentialValid(cred.Provider, cred) {
+			spec := providerSpecByID(cred.Provider)
+			missing := []string{}
+			for _, f := range spec.Fields {
+				if f.Required && strings.TrimSpace(credentialSecretValue(cred, f.Key)) == "" {
+					missing = append(missing, f.Label)
+				}
+			}
+			return fmt.Errorf("%s 凭据缺少 %s", spec.Name, strings.Join(missing, " 或 "))
 		}
 	}
 	for _, days := range item.ReminderDays {
@@ -11424,8 +11325,8 @@ func runDomainMonitorCheck(item *npmDomainMonitor) {
 				}
 			} else {
 				daysLeft := int(math.Ceil(time.Until(expiresAt).Hours() / 24))
-				if item.AutoRenew && domainMonitorRegistrarProvider(registeredDomain) == "dnshe" && daysLeft <= effectiveRenewBeforeDays(item) {
-					renewResult, renewErr := renewDNSHEDomain(registeredDomain, item.CredentialID)
+				if renewSpec := providerSpecByID(domainMonitorRegistrarProvider(registeredDomain)); item.AutoRenew && renewSpec != nil && renewSpec.Renewable && daysLeft <= effectiveRenewBeforeDays(item) {
+					renewResult, renewErr := renewRegisteredDomain(registeredDomain, item.CredentialID)
 					if renewErr != nil {
 						notifyDomainRenewFailed(registeredDomain, renewErr.Error())
 						result.Status = "error"
@@ -11665,61 +11566,29 @@ func fetchDomainRegistrationExpiry(host string, credentialID string) (string, ti
 		return "", time.Time{}, err
 	}
 	if hostedZone {
-		provider := domainMonitorRegistrarProvider(registeredDomain)
-		if provider == "" {
+		spec := providerSpecByID(domainMonitorRegistrarProvider(registeredDomain))
+		if spec == nil || spec.fetchExpiry == nil {
 			return registeredDomain, time.Time{}, fmt.Errorf("%w: %s 属于免费/托管二级域名，当前没有可用的到期查询接口", errDomainRegistrationExpiryUnavailable, registeredDomain)
 		}
-		cred, ok, err := domainRegistrarCredentialForDomainMonitor(provider, credentialID)
+		cred, ok, err := domainRegistrarCredentialForDomainMonitor(spec.ID, credentialID)
 		if err != nil {
 			return registeredDomain, time.Time{}, err
 		}
 		if !ok {
 			return registeredDomain, time.Time{}, errDomainRegistrationExpiryUnavailable
 		}
-		var expiresAt time.Time
-		switch provider {
-		case "digitalplat":
-			expiresAt, err = fetchDigitalPlatDomainExpiry(registeredDomain, cred.DigitalPlatAPIKey)
-		case "dnshe":
-			expiresAt, err = fetchDNSHEDomainExpiry(registeredDomain, cred)
-		default:
-			err = errDomainRegistrationExpiryUnavailable
-		}
+		expiresAt, err := spec.fetchExpiry(registeredDomain, cred)
 		if err != nil {
 			return registeredDomain, time.Time{}, err
 		}
 		return registeredDomain, expiresAt, nil
 	}
-	client := &http.Client{Timeout: domainMonitorRDAPTimeout}
-	rdapURL := "https://rdap.org/domain/" + url.PathEscape(registeredDomain)
-	res, err := client.Get(rdapURL)
+	// 通用兜底：先试多服务器 RDAP，再试 WHOIS（port 43），不需要域名商凭据。
+	expiresAt, err := fetchDomainExpiryFallback(registeredDomain)
 	if err != nil {
 		return registeredDomain, time.Time{}, err
 	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return registeredDomain, time.Time{}, fmt.Errorf("RDAP 返回 %s", res.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
-	if err != nil {
-		return registeredDomain, time.Time{}, err
-	}
-	var payload rdapDomainResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return registeredDomain, time.Time{}, err
-	}
-	for _, event := range payload.Events {
-		action := strings.ToLower(strings.TrimSpace(event.EventAction))
-		if !strings.Contains(action, "expiration") && !strings.Contains(action, "expiry") {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, strings.TrimSpace(event.EventDate))
-		if err != nil {
-			return registeredDomain, time.Time{}, err
-		}
-		return registeredDomain, t, nil
-	}
-	return registeredDomain, time.Time{}, errors.New("RDAP 未返回域名到期时间")
+	return registeredDomain, expiresAt, nil
 }
 
 func digitalPlatBaseURL() string {
@@ -11727,42 +11596,6 @@ func digitalPlatBaseURL() string {
 		return base
 	}
 	return digitalPlatAPIBaseURL
-}
-
-func digitalPlatCredentialForDomainMonitor(credentialID string) (Credential, bool, error) {
-	creds, err := loadCredentials()
-	if err != nil {
-		return Credential{}, false, err
-	}
-	credentialID = strings.TrimSpace(credentialID)
-	if credentialID != "" {
-		cred, ok := findCredential(credentialID, creds)
-		if !ok {
-			return Credential{}, false, errors.New("选择的 DigitalPlat 凭据不存在")
-		}
-		if cred.Provider != "digitalplat" {
-			return Credential{}, false, errors.New("域名监控只能选择 DigitalPlat 凭据")
-		}
-		if strings.TrimSpace(cred.DigitalPlatAPIKey) == "" {
-			return Credential{}, false, errors.New("DigitalPlat 凭据缺少 API Key")
-		}
-		return cred, true, nil
-	}
-
-	matches := []Credential{}
-	for _, cred := range creds {
-		if cred.Provider != "digitalplat" || strings.TrimSpace(cred.DigitalPlatAPIKey) == "" {
-			continue
-		}
-		matches = append(matches, cred)
-	}
-	if len(matches) == 0 {
-		return Credential{}, false, nil
-	}
-	if len(matches) > 1 {
-		return Credential{}, false, errors.New("存在多个 DigitalPlat 凭据，请在域名监控中选择一个")
-	}
-	return matches[0], true, nil
 }
 
 func fetchDigitalPlatDomainExpiry(domain string, apiKey string) (time.Time, error) {
@@ -14973,27 +14806,28 @@ func checkDynamicDNSItemStatus(item npmDynamicDNS, creds []Credential, publicIPC
 	meta["current_ips"] = publicIPs
 	missingMessages := []string{}
 	resolvedAll := []string{}
+	// provider 的分发全部来自 providers.go 注册表：
+	//   syncTarget 非空 → 需要 Zone+RR 的 API（阿里云、DNSPod）
+	//   syncHost   非空 → 按 FQDN 操作的 API（Cloudflare、Hurricane Electric）
+	//   两者都为空      → 退化为 DNS 解析比对
+	spec := providerSpecByID(cred.Provider)
 	for _, configured := range dynamicDNSDomains(item.DomainNames) {
-		if cred.Provider == "alidns" || cred.Provider == "dnspod" {
+		providerName := dnsProviderDisplayName(cred.Provider)
+		if spec != nil && spec.syncTarget != nil {
 			targets, err := dynamicDNSRecordTargets(configured)
 			if err != nil {
-				missingMessages = append(missingMessages, fmt.Sprintf("%s %s 记录目标解析失败: %v", configured, dnsProviderDisplayName(cred.Provider), err))
+				missingMessages = append(missingMessages, fmt.Sprintf("%s %s 记录目标解析失败: %v", configured, providerName, err))
 				continue
 			}
 			for _, target := range targets {
-				var remoteIPs []string
-				if cred.Provider == "dnspod" {
-					remoteIPs, err = syncDNSPodDynamicDNSRecord(target, cred, publicIPs, wantIPv4, wantIPv6)
-				} else {
-					remoteIPs, err = syncAliyunDynamicDNSRecord(target, cred, publicIPs, wantIPv4, wantIPv6)
-				}
-				if err != nil {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s %s 记录检查失败: %v", target.Host, dnsProviderDisplayName(cred.Provider), err))
+				remoteIPs, syncErr := spec.syncTarget(target, cred, publicIPs, wantIPv4, wantIPv6)
+				if syncErr != nil {
+					missingMessages = append(missingMessages, fmt.Sprintf("%s %s %s: %v", target.Host, providerName, syncErrorLabel(spec), syncErr))
 					continue
 				}
 				resolvedAll = append(resolvedAll, remoteIPs...)
 				if len(remoteIPs) == 0 {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s %s 未找到匹配的 A/AAAA 记录", target.Host, dnsProviderDisplayName(cred.Provider)))
+					missingMessages = append(missingMessages, fmt.Sprintf("%s %s %s", target.Host, providerName, syncMissingLabel(spec)))
 					continue
 				}
 				if !stringSetsEqual(remoteIPs, publicIPs) {
@@ -15003,28 +14837,15 @@ func checkDynamicDNSItemStatus(item npmDynamicDNS, creds []Credential, publicIPC
 			continue
 		}
 		for _, host := range dynamicDNSHostnames(configured) {
-			if cred.Provider == "cloudflare" {
-				remoteIPs, err := syncCloudflareDynamicDNSRecord(host, cred, publicIPs, wantIPv4, wantIPv6)
-				if err != nil {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s Cloudflare 记录检查失败: %v", host, err))
+			if spec != nil && spec.syncHost != nil {
+				remoteIPs, syncErr := spec.syncHost(item, host, cred, publicIPs, wantIPv4, wantIPv6)
+				if syncErr != nil {
+					missingMessages = append(missingMessages, fmt.Sprintf("%s %s %s: %v", host, providerName, syncErrorLabel(spec), syncErr))
 					continue
 				}
 				resolvedAll = append(resolvedAll, remoteIPs...)
 				if len(remoteIPs) == 0 {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s Cloudflare 未找到匹配的 A/AAAA 记录", host))
-					continue
-				}
-				continue
-			}
-			if cred.Provider == "he" {
-				remoteIPs, err := syncHEDynamicDNSRecord(host, cred, publicIPs, item.Resolvers, wantIPv4, wantIPv6)
-				if err != nil {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s Hurricane Electric 记录更新失败: %v", host, err))
-					continue
-				}
-				resolvedAll = append(resolvedAll, remoteIPs...)
-				if len(remoteIPs) == 0 {
-					missingMessages = append(missingMessages, fmt.Sprintf("%s Hurricane Electric 没有匹配的 A/AAAA 记录", host))
+					missingMessages = append(missingMessages, fmt.Sprintf("%s %s %s", host, providerName, syncMissingLabel(spec)))
 					continue
 				}
 				continue

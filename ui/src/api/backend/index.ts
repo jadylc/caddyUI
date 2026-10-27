@@ -61,6 +61,7 @@ export * from "./getHostsReport";
 export * from "./getLogs";
 export * from "./getNotificationChannels";
 export * from "./getObservability";
+export * from "./getProviders";
 export * from "./getProxyHost";
 export * from "./getProxyHosts";
 export * from "./getRedirectionHost";

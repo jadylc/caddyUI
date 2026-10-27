@@ -6,17 +6,17 @@ import { Alert } from "react-bootstrap";
 import Modal from "react-bootstrap/Modal";
 import Select from "react-select";
 import { createCredential } from "src/api/backend";
-import type { CredentialSummary } from "src/api/backend/models";
+import type { CredentialSummary, ProviderField, ProviderSpec } from "src/api/backend/models";
 import { Button, Loading } from "src/components";
-import { useCredentials, useDomainMonitor, useSetDomainMonitor } from "src/hooks";
+import { ProviderCredentialFields } from "src/components/Form/ProviderCredentialFields";
+import { useCredentials, useDomainMonitor, useProviders, useSetDomainMonitor } from "src/hooks";
 import { intl, T } from "src/locale";
 import { validateDuration, validateNumber, validateString } from "src/modules/Validations";
 import { useConfirmClose } from "src/hooks/useConfirmClose";
 import { showObjectSuccess } from "src/notifications";
 import { ConfirmDiscardModal, DirtySync } from "./ConfirmDiscardModal";
 
-const NEW_DIGITALPLAT_CREDENTIAL = "__new_digitalplat__";
-const NEW_DNSHE_CREDENTIAL = "__new_dnshe__";
+const NEW_REGISTRAR_CREDENTIAL_PREFIX = "__new_registrar__";
 const CUSTOM_REGISTRAR_PROVIDER = "__custom__";
 
 const showDomainMonitorModal = (id: number | "new") => {
@@ -38,83 +38,101 @@ const splitNumbers = (value: string) =>
 		.map((item: string) => Number(item))
 		.filter((item: number) => Number.isInteger(item) && item >= 0);
 
-const registrarProviderName = (provider: string) => {
-	if (provider === "alidns" || provider === "aliyun") return "阿里云";
-	if (provider === "digitalplat") return "DigitalPlat";
-	if (provider === "dnshe") return "DNSHE";
-	if (provider === "cloudflare") return "Cloudflare";
-	if (provider === "dnspod") return "DNSPod";
-	return provider;
+// 域名商展示名与选项全部来自后端注册表（见 useProviders），不在前端硬编码。
+const registrarProviderName = (provider: string, specs?: ProviderSpec[]) => {
+	const id = String(provider || "").trim();
+	const spec = specs?.find((item) => item.id === id);
+	return spec?.name || id;
 };
 
-const registrarProviderOptions = [
-	{ value: "", label: "自动识别" },
-	{ value: "alidns", label: "阿里云" },
-	{ value: "digitalplat", label: "DigitalPlat" },
-	{ value: "dnshe", label: "DNSHE" },
-	{ value: "cloudflare", label: "Cloudflare" },
-	{ value: "dnspod", label: "DNSPod" },
-	{ value: CUSTOM_REGISTRAR_PROVIDER, label: "手动填写" },
-];
-
-const registrarProviderValue = (value: string) => {
+const registrarProviderValue = (value: string, specs?: ProviderSpec[]) => {
 	const provider = String(value || "").trim();
-	const known = registrarProviderOptions.some((option) => option.value === provider);
+	const known =
+		!provider ||
+		(specs || []).some((item) => item.id === provider || item.name === provider);
 	return {
 		registrarProvider: known ? provider : provider ? CUSTOM_REGISTRAR_PROVIDER : "",
 		registrarProviderCustom: known ? "" : provider,
 	};
 };
 
+// 新增凭据选项的 value：`__new_registrar__:<providerId>`。
+const newRegistrarCredentialValue = (providerId: string) => `${NEW_REGISTRAR_CREDENTIAL_PREFIX}:${providerId}`;
+
 const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => {
 	const { handleClose, showConfirm, handleConfirm, handleCancel, dirtyRef } = useConfirmClose(remove);
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useDomainMonitor(id);
 	const { data: credentials, isLoading: credentialsLoading } = useCredentials();
+	const { data: providers } = useProviders();
 	const { mutate: setDomainMonitor } = useSetDomainMonitor();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 
+	const registrarSpecs: ProviderSpec[] = (providers || []).filter((item) => item.registrar);
+	const registrarProviderIds = new Set(registrarSpecs.map((item: ProviderSpec) => item.id));
+	const registrarProviderOptions = [
+		{ value: "", label: "自动识别" },
+		...registrarSpecs.map((item: ProviderSpec) => ({ value: item.id, label: item.name })),
+		{ value: CUSTOM_REGISTRAR_PROVIDER, label: "手动填写" },
+	];
 	const registrarCredentials = (credentials || []).filter(
-		(item: CredentialSummary) => item.provider === "digitalplat" || item.provider === "dnshe",
+		(item: CredentialSummary) => registrarProviderIds.has(item.provider),
 	);
 	const credentialOptions = [
 		{ value: "", label: "自动选择（每个域名商仅有一个凭据时使用）" },
 		...registrarCredentials.map((item: CredentialSummary) => ({
 			value: item.id,
-			label: `${registrarProviderName(item.provider)} - ${item.name}`,
+			label: `${registrarProviderName(item.provider, registrarSpecs)} - ${item.name}`,
 			credentialId: item.id,
 			provider: item.provider,
 		})),
-		{ value: NEW_DIGITALPLAT_CREDENTIAL, label: "新增 DigitalPlat 凭据", isNew: true },
-		{ value: NEW_DNSHE_CREDENTIAL, label: "新增 DNSHE 凭据", isNew: true },
+		...registrarSpecs.map((item: ProviderSpec) => ({
+			value: newRegistrarCredentialValue(item.id),
+			label: `新增 ${item.name} 凭据`,
+			provider: item.id,
+			isNew: true,
+		})),
 	];
+
+	// 判断当前选择对应的域名商（新增凭据走 `__new_registrar__:<id>` 约定）。
+	const credentialProviderOf = (credentialChoice: string) => {
+		if (credentialChoice.startsWith(`${NEW_REGISTRAR_CREDENTIAL_PREFIX}:`)) {
+			return credentialChoice.slice(`${NEW_REGISTRAR_CREDENTIAL_PREFIX}:`.length);
+		}
+		return (
+			registrarCredentials.find((item: CredentialSummary) => item.id === credentialChoice)?.provider || ""
+		);
+	};
 
 	const onSubmit = async (values: any, { setSubmitting }: any) => {
 		if (isSubmitting) return;
 		setIsSubmitting(true);
 		setErrorMsg(null);
 
-		let credentialId =
-			values.credentialChoice === NEW_DIGITALPLAT_CREDENTIAL || values.credentialChoice === NEW_DNSHE_CREDENTIAL
-				? ""
-				: values.credentialChoice || "";
-		if (
-			values.credentialChoice === NEW_DIGITALPLAT_CREDENTIAL ||
-			values.credentialChoice === NEW_DNSHE_CREDENTIAL
-		) {
-			const provider = values.credentialChoice === NEW_DNSHE_CREDENTIAL ? "dnshe" : "digitalplat";
-			const digitalPlatApiKey = String(values.digitalPlatApiKey || "").trim();
-			const dnsheApiKey = String(values.dnsheApiKey || "").trim();
-			const dnsheApiSecret = String(values.dnsheApiSecret || "").trim();
-			if (provider === "digitalplat" && !digitalPlatApiKey) {
-				setErrorMsg("请填写 DigitalPlat API Key");
-				setIsSubmitting(false);
-				setSubmitting(false);
-				return;
+		const creatingNewCredential = String(values.credentialChoice || "").startsWith(
+			`${NEW_REGISTRAR_CREDENTIAL_PREFIX}:`,
+		);
+		let credentialId = creatingNewCredential ? "" : values.credentialChoice || "";
+		if (creatingNewCredential) {
+			const provider = credentialProviderOf(values.credentialChoice);
+			const spec = registrarSpecs.find((item: ProviderSpec) => item.id === provider);
+			const secrets: Record<string, string> = {};
+			for (const field of spec?.fields || []) {
+				const value = String(values.credentialSecrets?.[field.key] || "").trim();
+				if (value) {
+					secrets[field.key] = value;
+				}
 			}
-			if (provider === "dnshe" && (!dnsheApiKey || !dnsheApiSecret)) {
-				setErrorMsg("请填写 DNSHE API Key 和 API Secret");
+			const missing = (spec?.fields || []).filter(
+				(field: ProviderField) => field.required && !secrets[field.key],
+			);
+			if (missing.length) {
+				setErrorMsg(
+					`请填写 ${registrarProviderName(provider, registrarSpecs)} 的 ${missing
+						.map((item: ProviderField) => item.label)
+						.join("、")}`,
+				);
 				setIsSubmitting(false);
 				setSubmitting(false);
 				return;
@@ -123,11 +141,9 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 				const result = await createCredential({
 					name:
 						String(values.registrarCredentialName || "").trim() ||
-						`${registrarProviderName(provider)} - ${values.name || "域名监控"}`,
+						`${registrarProviderName(provider, registrarSpecs)} - ${values.name || "域名监控"}`,
 					provider,
-					digitalPlatApiKey,
-					dnsheApiKey,
-					dnsheApiSecret,
+					secrets,
 				});
 				credentialId = result.id;
 				queryClient.invalidateQueries({ queryKey: ["credentials"] });
@@ -139,14 +155,9 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 			}
 		}
 
-		const selectedCredentialProvider =
-			values.credentialChoice === NEW_DNSHE_CREDENTIAL
-				? "dnshe"
-				: values.credentialChoice === NEW_DIGITALPLAT_CREDENTIAL
-					? "digitalplat"
-					: registrarCredentials.find((item: CredentialSummary) => item.id === values.credentialChoice)
-							?.provider || "";
-		const usingDNSHECredential = selectedCredentialProvider === "dnshe";
+		const selectedCredentialProvider = credentialProviderOf(values.credentialChoice);
+		const renewableSpec = registrarSpecs.find((item: ProviderSpec) => item.id === selectedCredentialProvider);
+		const usingRenewableCredential = !!renewableSpec?.renewable;
 		const payload = {
 			...values,
 			id: id === "new" ? undefined : id,
@@ -157,16 +168,14 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 					: String(values.registrarProvider || "").trim(),
 			thresholdDays: Number(values.thresholdDays || 0),
 			reminderDays: splitNumbers(values.reminderDays),
-			autoRenew: usingDNSHECredential && !!values.autoRenew,
-			renewBeforeDays: usingDNSHECredential ? Number(values.renewBeforeDays || 0) : 0,
+			autoRenew: usingRenewableCredential && !!values.autoRenew,
+			renewBeforeDays: usingRenewableCredential ? Number(values.renewBeforeDays || 0) : 0,
 			domainNames: splitLines(values.domainNames),
 			resolvers: splitLines(values.resolvers),
 			credentialChoice: undefined,
 			registrarProviderCustom: undefined,
 			registrarCredentialName: undefined,
-			digitalPlatApiKey: undefined,
-			dnsheApiKey: undefined,
-			dnsheApiSecret: undefined,
+			credentialSecrets: undefined,
 		};
 
 		setDomainMonitor(payload, {
@@ -206,11 +215,10 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 									data.meta?.registrarProvider ||
 									data.meta?.registrar_provider ||
 									"",
+								registrarSpecs,
 							),
 							registrarCredentialName: data.name ? `${data.name} 域名商凭据` : "域名商凭据",
-							digitalPlatApiKey: "",
-							dnsheApiKey: "",
-							dnsheApiSecret: "",
+							credentialSecrets: {},
 							reminderDays: (data.reminderDays || [30, 15, 7, 3, 1]).join(","),
 							autoRenew: data.autoRenew ?? false,
 							renewBeforeDays: data.renewBeforeDays || 30,
@@ -229,36 +237,24 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 							(values.credentialChoice
 								? { value: values.credentialChoice, label: `已选择凭据 ${values.credentialChoice}` }
 								: credentialOptions[0]);
-						const creatingDigitalPlatCredential = values.credentialChoice === NEW_DIGITALPLAT_CREDENTIAL;
-						const creatingDNSHECredential = values.credentialChoice === NEW_DNSHE_CREDENTIAL;
-						const creatingRegistrarCredential = creatingDigitalPlatCredential || creatingDNSHECredential;
-						const selectedCredentialProvider = creatingDNSHECredential
-							? "dnshe"
-							: creatingDigitalPlatCredential
-								? "digitalplat"
-								: registrarCredentials.find(
-										(item: CredentialSummary) => item.id === values.credentialChoice,
-									)?.provider || "";
-						const usingDNSHECredential = selectedCredentialProvider === "dnshe";
+						const creatingNewCredential = String(values.credentialChoice || "").startsWith(
+							`${NEW_REGISTRAR_CREDENTIAL_PREFIX}:`,
+						);
+						const creatingRegistrarCredential = creatingNewCredential;
+						const selectedCredentialProvider = credentialProviderOf(values.credentialChoice);
+						const creatingSpec = registrarSpecs.find(
+							(item: ProviderSpec) => item.id === selectedCredentialProvider,
+						);
+						const usingRenewableCredential = !!creatingSpec?.renewable;
 						const handleCredentialChange = (option: any) => {
 							const nextValue = option?.value || "";
 							setFieldValue("credentialChoice", nextValue);
 							setFieldValue("credentialId", option?.credentialId || "");
-							const nextProvider =
-								nextValue === NEW_DNSHE_CREDENTIAL
-									? "dnshe"
-									: nextValue === NEW_DIGITALPLAT_CREDENTIAL
-										? "digitalplat"
-										: registrarCredentials.find((item: CredentialSummary) => item.id === nextValue)
-												?.provider || "";
-							if (nextValue !== NEW_DIGITALPLAT_CREDENTIAL) {
-								setFieldValue("digitalPlatApiKey", "");
-							}
-							if (nextValue !== NEW_DNSHE_CREDENTIAL) {
-								setFieldValue("dnsheApiKey", "");
-								setFieldValue("dnsheApiSecret", "");
-							}
-							if (nextProvider !== "dnshe") {
+							const nextProvider = credentialProviderOf(nextValue);
+							// 切换到新的域名商时清空密钥，表单按新 schema 渲染。
+							setFieldValue("credentialSecrets", {});
+							const nextSpec = registrarSpecs.find((item: ProviderSpec) => item.id === nextProvider);
+							if (!nextSpec?.renewable) {
 								setFieldValue("autoRenew", false);
 							}
 						};
@@ -536,23 +532,21 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 													menuPortalTarget={document.body}
 												/>
 												<small className="text-muted">
-													仅用于查询域名到期；DNSHE 凭据还用于手动/自动续期。
+													仅用于查询域名到期；支持续期的域名商凭据还可用于手动/自动续期。
 													<br />
-													DigitalPlat 支持 .us.kg、.dpdns.org、.qzz.io、.xx.kg、.qd.je；DNSHE
-													支持
-													.cc.cd、.ccwu.cc、.bbroot.com。留空时每个域名商仅有一个凭据会自动使用。
+													留空时每个域名商仅有一个凭据会自动使用。
 												</small>
 												{creatingRegistrarCredential ? (
 													<div className="row mt-3">
-														<div className="col-md-6">
+														<div className="col-md-12">
 															<label
 																className="form-label"
-																htmlFor="domainMonitorDigitalPlatCredentialName"
+																htmlFor="domainMonitorRegistrarCredentialName"
 															>
 																凭据名称
 															</label>
 															<input
-																id="domainMonitorDigitalPlatCredentialName"
+																id="domainMonitorRegistrarCredentialName"
 																className="form-control"
 																type="text"
 																value={values.registrarCredentialName}
@@ -564,62 +558,19 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 																}
 															/>
 														</div>
-														<div
-															className={
-																creatingDNSHECredential ? "col-md-6" : "col-md-6"
-															}
-														>
-															<label
-																className="form-label"
-																htmlFor="domainMonitorDigitalPlatApiKey"
-															>
-																API Key
-															</label>
-															<input
-																id="domainMonitorDigitalPlatApiKey"
-																className="form-control"
-																type="password"
-																autoComplete="off"
-																required={creatingRegistrarCredential}
-																value={
-																	creatingDNSHECredential
-																		? values.dnsheApiKey
-																		: values.digitalPlatApiKey
-																}
-																onChange={(event) =>
-																	setFieldValue(
-																		creatingDNSHECredential
-																			? "dnsheApiKey"
-																			: "digitalPlatApiKey",
-																		event.target.value,
-																	)
+														<div className="col-md-12">
+															<ProviderCredentialFields
+																fields={creatingSpec?.fields}
+																values={values.credentialSecrets}
+																idPrefix="domainMonitor"
+																onChange={(key: string, value: string) =>
+																	setFieldValue("credentialSecrets", {
+																		...(values.credentialSecrets || {}),
+																		[key]: value,
+																	})
 																}
 															/>
 														</div>
-														{creatingDNSHECredential ? (
-															<div className="col-md-6 mt-3">
-																<label
-																	className="form-label"
-																	htmlFor="domainMonitorDNSHEApiSecret"
-																>
-																	API Secret
-																</label>
-																<input
-																	id="domainMonitorDNSHEApiSecret"
-																	className="form-control"
-																	type="password"
-																	autoComplete="off"
-																	required={creatingDNSHECredential}
-																	value={values.dnsheApiSecret}
-																	onChange={(event) =>
-																		setFieldValue(
-																			"dnsheApiSecret",
-																			event.target.value,
-																		)
-																	}
-																/>
-															</div>
-														) : null}
 													</div>
 												) : null}
 												<div className="row mt-3">
@@ -643,13 +594,13 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 															英文逗号分隔，达到任一提前天数时推送提醒。
 														</small>
 													</div>
-													{usingDNSHECredential ? (
+													{usingRenewableCredential ? (
 														<div className="col-md-6">
 															<label
 																className="form-label"
 																htmlFor="domainMonitorRenewBeforeDays"
 															>
-																DNSHE 自动续期提前天数
+																自动续期提前天数
 															</label>
 															<input
 																id="domainMonitorRenewBeforeDays"
@@ -674,9 +625,7 @@ const DomainMonitorModal = EasyModal.create(({ id, visible, remove }: Props) => 
 																		setFieldValue("autoRenew", event.target.checked)
 																	}
 																/>
-																<span className="form-check-label">
-																	启用 DNSHE 自动续期
-																</span>
+																<span className="form-check-label">启用自动续期</span>
 															</label>
 														</div>
 													) : null}

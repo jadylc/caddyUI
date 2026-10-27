@@ -622,9 +622,33 @@ export interface DNSProvider {
 	id: string;
 	name: string;
 	credentials: string;
+	fields?: ProviderField[];
 	provider?: string;
 	credentialId?: string;
 	saved?: boolean;
+}
+
+// ProviderField 与后端 providerFieldView 对应，前端据此按 schema 渲染凭据表单。
+export interface ProviderField {
+	key: string;
+	label: string;
+	placeholder?: string;
+	help?: string;
+	secret: boolean;
+	required: boolean;
+	env_name?: string;
+}
+
+// ProviderSpec 与后端 providerSpecView 对应。
+export interface ProviderSpec {
+	id: string;
+	name: string;
+	dns: boolean;
+	ddns: boolean;
+	registrar: boolean;
+	renewable: boolean;
+	fields?: ProviderField[];
+	credentials: string;
 }
 
 export interface CredentialSummary {
@@ -646,6 +670,9 @@ export interface CredentialDetail extends CredentialSummary {
 	digitalPlatApiKey?: string;
 	dnsheApiKey?: string;
 	dnsheApiSecret?: string;
+	// 新增 provider 的密钥统一放这里；历史 provider 的密钥也同步回填到这里。
+	secrets?: Record<string, string>;
+	fields?: ProviderField[];
 }
 
 export interface NotificationEventSpec {

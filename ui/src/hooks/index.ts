@@ -25,6 +25,7 @@ export * from "./useHealth";
 export * from "./useSystemSettings";
 export * from "./useHostReport";
 export * from "./useObservability";
+export * from "./useProviders";
 export * from "./useProxyHost";
 export * from "./useProxyHosts";
 export * from "./useRedirectionHost";

@@ -6,8 +6,9 @@ import { Alert } from "react-bootstrap";
 import Modal from "react-bootstrap/Modal";
 import Select from "react-select";
 import { createCredential } from "src/api/backend";
-import type { DNSProvider } from "src/api/backend/models";
+import type { DNSProvider, ProviderField } from "src/api/backend/models";
 import { Button, Loading } from "src/components";
+import { ProviderCredentialFields } from "src/components/Form/ProviderCredentialFields";
 import { useDnsProviders, useDynamicDNSItem, useSetDynamicDNSItem } from "src/hooks";
 import { intl, T } from "src/locale";
 import { validateDuration, validateString } from "src/modules/Validations";
@@ -19,12 +20,10 @@ const showDynamicDNSModal = (id: number | "new") => {
 	EasyModal.show(DynamicDNSModal, { id });
 };
 
-const dnsProviderName = (provider: string) => {
-	if (provider === "alidns") return "阿里云 DNS";
-	if (provider === "cloudflare") return "Cloudflare";
-	if (provider === "dnspod") return "DNSPod.cn";
-	if (provider === "he") return "Hurricane Electric";
-	return provider;
+// provider 展示名由注册表下发，不在前端硬编码。
+const dnsProviderLabel = (providers: DNSProvider[], provider: string) => {
+	const match = providers.find((p) => (p.provider || p.id) === provider);
+	return match?.name || provider;
 };
 
 interface Props extends InnerModalProps {
@@ -36,16 +35,18 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useDynamicDNSItem(id);
 	const { data: dnsProviders, isLoading: providersLoading } = useDnsProviders();
+	const providerList = dnsProviders || [];
 	const { mutate: setDynamicDNS } = useSetDynamicDNSItem();
 	const [errorMsg, setErrorMsg] = useState<ReactNode | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 
-	const providerOptions = (dnsProviders || []).map((p: DNSProvider) => ({
+	const providerOptions = providerList.map((p: DNSProvider) => ({
 		value: p.credentialId || p.id,
 		label: p.name,
 		provider: p.provider || p.id,
 		credentialId: p.credentialId,
 		saved: p.saved,
+		fields: p.fields,
 	}));
 
 	const onSubmit = async (values: any, { setSubmitting }: any) => {
@@ -64,20 +65,19 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 		if (!credentialId && values.dnsProvider) {
 			try {
 				const provider = values.dnsProvider;
+				const providerSpec = providerList.find((p) => (p.provider || p.id) === provider);
 				const credData: any = {
-					name: `动态域名 - ${dnsProviderName(provider)}`,
+					name: `动态域名 - ${dnsProviderLabel(providerList, provider)}`,
 					provider,
+					// 统一提交 secrets：后端按 provider 注册表回填历史字段。
+					secrets: (providerSpec?.fields || []).reduce(
+						(acc: Record<string, string>, field: ProviderField) => {
+							acc[field.key] = values.secrets?.[field.key] || "";
+							return acc;
+						},
+						{},
+					),
 				};
-				if (provider === "alidns") {
-					credData.aliyunKey = values.aliyunKey || "";
-					credData.aliyunSecret = values.aliyunSecret || "";
-				} else if (provider === "cloudflare") {
-					credData.cfToken = values.cfToken || "";
-				} else if (provider === "dnspod") {
-					credData.dnspodToken = values.dnspodToken || "";
-				} else if (provider === "he") {
-					credData.heApiKey = values.heApiKey || "";
-				}
 				const result = await createCredential(credData);
 				credentialId = result.id;
 				queryClient.invalidateQueries({ queryKey: ["credentials"] });
@@ -140,11 +140,7 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 							domainNames: (data.domainNames || []).join("\n"),
 							credentialId: data.credentialId || "",
 							dnsProvider: "",
-							aliyunKey: "",
-							aliyunSecret: "",
-							cfToken: "",
-							dnspodToken: "",
-							heApiKey: "",
+							secrets: { ...((data.meta?.credentialSecrets as Record<string, string>) || {}) },
 							ipv4: data.ipv4 ?? true,
 							ipv6: data.ipv6 ?? false,
 							checkInterval: data.checkInterval || "5m",
@@ -165,25 +161,18 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 						);
 						const isSavedCredentialSelected = !!selectedOption?.credentialId;
 						const activeProvider = selectedOption?.provider || values.dnsProvider;
+						const activeFields = selectedOption?.fields;
 
 						const handleProviderChange = (option: any) => {
 							if (option?.credentialId) {
 								setFieldValue("credentialId", option.credentialId);
 								setFieldValue("dnsProvider", "");
-								setFieldValue("aliyunKey", "");
-								setFieldValue("aliyunSecret", "");
-								setFieldValue("cfToken", "");
-								setFieldValue("dnspodToken", "");
-								setFieldValue("heApiKey", "");
 							} else {
 								setFieldValue("credentialId", "");
 								setFieldValue("dnsProvider", option?.provider || option?.value);
-								setFieldValue("aliyunKey", "");
-								setFieldValue("aliyunSecret", "");
-								setFieldValue("cfToken", "");
-								setFieldValue("dnspodToken", "");
-								setFieldValue("heApiKey", "");
 							}
+							// 切换到新的提供商时清空密钥，表单按新 schema 渲染。
+							setFieldValue("secrets", {});
 						};
 
 						return (
@@ -239,95 +228,21 @@ const DynamicDNSModal = EasyModal.create(({ id, visible, remove }: Props) => {
 											})}
 											menuPortalTarget={document.body}
 										/>
-										{activeProvider && !isSavedCredentialSelected && (
-											<div className="mt-3">
-												{activeProvider === "alidns" && (
-													<div className="row">
-														<div className="col-md-6">
-															<label className="form-label" htmlFor="aliyunKey">
-																<T id="dynamic-dns.alidns.access-key-id" />
-															</label>
-															<input
-																id="aliyunKey"
-																className="form-control"
-																type="text"
-																autoComplete="off"
-																value={values.aliyunKey}
-																onChange={(e) =>
-																	setFieldValue("aliyunKey", e.target.value)
-																}
-															/>
-														</div>
-														<div className="col-md-6">
-															<label className="form-label" htmlFor="aliyunSecret">
-																<T id="dynamic-dns.alidns.access-key-secret" />
-															</label>
-															<input
-																id="aliyunSecret"
-																className="form-control"
-																type="password"
-																autoComplete="off"
-																value={values.aliyunSecret}
-																onChange={(e) =>
-																	setFieldValue("aliyunSecret", e.target.value)
-																}
-															/>
-														</div>
-													</div>
-												)}
-												{activeProvider === "cloudflare" && (
-													<div>
-														<label className="form-label" htmlFor="cfToken">
-															<T id="dynamic-dns.cloudflare.api-token" />
-														</label>
-														<input
-															id="cfToken"
-															className="form-control"
-															type="password"
-															autoComplete="off"
-															value={values.cfToken}
-															onChange={(e) => setFieldValue("cfToken", e.target.value)}
-														/>
-													</div>
-												)}
-												{activeProvider === "dnspod" && (
-													<div>
-														<label className="form-label" htmlFor="dnspodToken">
-															<T id="dynamic-dns.dnspod.token" />
-														</label>
-														<input
-															id="dnspodToken"
-															className="form-control"
-															type="password"
-															autoComplete="off"
-															placeholder="APP_ID,APP_TOKEN"
-															value={values.dnspodToken}
-															onChange={(e) =>
-																setFieldValue("dnspodToken", e.target.value)
-															}
-														/>
-													</div>
-												)}
-												{activeProvider === "he" && (
-													<div>
-														<label className="form-label" htmlFor="heApiKey">
-															Hurricane Electric API Key
-														</label>
-														<input
-															id="heApiKey"
-															className="form-control"
-															type="password"
-															autoComplete="off"
-															value={values.heApiKey}
-															onChange={(e) => setFieldValue("heApiKey", e.target.value)}
-														/>
-													</div>
-												)}
-												<small className="text-danger mt-1">
-													<T id="certificates.dns.credentials-warning" />
-												</small>
-											</div>
-										)}
+									{activeProvider && !isSavedCredentialSelected ? (
+										<>
+											<ProviderCredentialFields
+												fields={activeFields}
+												values={values.secrets || {}}
+												idPrefix="dynamicDns"
+												onChange={(key: string, value: string) =>
+													setFieldValue("secrets", { ...(values.secrets || {}), [key]: value })
+												}
+											/>
+											<small className="text-danger mt-1">
+												<T id="certificates.dns.credentials-warning" />
+											</small>
+										</>
+									) : null}
 										{isSavedCredentialSelected && (
 											<small className="text-muted mt-1">
 												<T id="dynamic-dns.credential-reusing" />

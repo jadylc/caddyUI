@@ -36,12 +36,26 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --with github.com/caddy-dns/cloudflare \
     --with github.com/caddy-dns/dnspod=github.com/caddy-dns/dnspod@fb7cc31c \
     --with github.com/caddy-dns/he \
+    --with github.com/caddy-dns/huaweicloud@v1.0.1 \
+    --with github.com/caddy-dns/rfc2136@v1.0.0 \
+    --with github.com/caddy-dns/duckdns@v0.5.0 \
+    --with github.com/caddy-dns/dynu@v1.0.0 \
+    --with github.com/caddy-dns/namecheap@v1.0.0 \
+    --with github.com/caddy-dns/porkbun@v0.3.1 \
+    --with github.com/caddy-dns/desec@v1.1.0 \
+    --with github.com/caddy-dns/route53@v1.6.2 \
+    --with github.com/caddy-dns/hetzner@v1.0.0 \
+    --with github.com/caddy-dns/gandi@v1.2.1 \
+    --with github.com/caddy-dns/ovh@v1.1.0 \
+    --with github.com/caddy-dns/scaleway@v0.2.2 \
+    --with github.com/caddy-dns/linode@v0.8.0 \
+    --with github.com/caddy-dns/godaddy@v1.2.0 \
 --with github.com/mholt/caddy-l4 \
     --with github.com/mholt/caddy-dynamicdns \
     --with golang.org/x/net/publicsuffix@latest \
     --with github.com/corazawaf/coraza-caddy/v2 \
     && echo "=== built caddy deps ===" \
-    && go version -m /usr/bin/caddy | grep -E 'golang.org/x/net|dnspod|corazawaf' || true
+    && go version -m /usr/bin/caddy | grep -E 'golang.org/x/net|dnspod|corazawaf|huaweicloud|rfc2136|duckdns|dynu|namecheap|porkbun|desec|route53|hetzner|gandi|ovh|scaleway|linode|godaddy' || true
 
 # ===== 阶段3：编译 site 管理 API（Go 静态二进制） =====
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS api-builder

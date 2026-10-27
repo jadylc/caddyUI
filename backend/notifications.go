@@ -61,8 +61,8 @@ type notificationEventSpec struct {
 var notificationEventSpecs = []notificationEventSpec{
 	{notificationEventDomainExpiring, "域名即将到期", "域名到达配置的提前提醒天数"},
 	{notificationEventDomainExpired, "域名已过期", "域名注册到期时间已经过去"},
-	{notificationEventDomainRenewSuccess, "域名续期成功", "DNSHE 手动或自动续期成功"},
-	{notificationEventDomainRenewFailed, "域名续期失败", "DNSHE 手动或自动续期失败"},
+	{notificationEventDomainRenewSuccess, "域名续期成功", "域名商 API 手动或自动续期成功"},
+	{notificationEventDomainRenewFailed, "域名续期失败", "域名商 API 手动或自动续期失败"},
 	{notificationEventDomainCheckFailed, "域名到期检查失败", "RDAP 或注册商 API 检查失败"},
 	{notificationEventSSLExpiring, "证书即将到期", "证书到达监控告警阈值"},
 	{notificationEventSSLExpired, "证书已过期", "证书有效期已经过去"},

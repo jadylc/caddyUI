@@ -215,6 +215,9 @@ ports:
 - 保存配置时会立即尝试检查当前公网 IP 和远端记录。
 - 适合动态公网 IP、家庭宽带和云解析自动同步场景。
 - 开启 Cloudflare 橙云代理时，远端 DNS 查询可能返回代理 IP；实际 DDNS 更新仍应以 DNS 提供商记录为准。
+- 当前支持阿里云 DNS、Cloudflare、DNSPod、Hurricane Electric、华为云 DNS、RFC2136（自建 DNS）、DuckDNS、Dynu、Namecheap、Porkbun、deSEC、Route 53、Hetzner Cloud、Gandi、OVH、Scaleway、Linode、GoDaddy。
+- 除阿里云 DNS、Cloudflare、DNSPod、Hurricane Electric 外的运营商，写入由 Caddy 侧 `caddy-dynamicdns` + 对应 `libdns` 模块完成，后端状态巡检退化为 DNS 解析比对。
+- RFC2136 一份配置覆盖 BIND、Knot、PowerDNS、Windows DNS 等所有支持 TSIG 的自建权威服务器。
 
 ### 访问控制与认证
 
@@ -256,10 +259,20 @@ example.com:8443
 
 域名商 API 支持：
 
-| 服务 | 支持域名 |
-| --- | --- |
-| DigitalPlat | `.us.kg`、`.dpdns.org`、`.qzz.io`、`.xx.kg`、`.qd.je` |
-| DNSHE | `.cc.cd`、`.ccwu.cc`、`.bbroot.com` |
+| 服务 | 支持域名 | 到期查询 | 续期 |
+| --- | --- | --- | --- |
+| DigitalPlat | `.us.kg`、`.dpdns.org`、`.qzz.io`、`.xx.kg`、`.qd.je` | ✓ | ✗ |
+| DNSHE | `.cc.cd`、`.ccwu.cc`、`.bbroot.com` | ✓ | ✓ |
+| Cloudflare Registrar | 账户下全部已注册域名 | ✓ | ✓ |
+| Porkbun | 账户下全部已注册域名 | ✓ | ✓ |
+
+Cloudflare Registrar 和 Porkbun 支持查询任意已注册域名的到期时间并续期，
+无需限定特定后缀。Cloudflare 的 Account ID 可选，留空时后端会自动获取。
+
+通用兜底（不需要域名商凭据）：对于非托管二级域，后端先通过 IANA RDAP bootstrap
+查询 TLD 对应的 RDAP 服务器（多服务器 + rdap.org 兜底），RDAP 失败时回退到 WHOIS
+（port 43，自动通过 IANA 查找 WHOIS 服务器）。支持 Verisign、PIR、CNNIC、DENIC、
+RU 等常见 WHOIS 响应格式的到期时间解析。
 
 不支持 API 的免费/托管二级域名会标记为「不可用」，不会强行识别成错误的根域名。
 
@@ -310,6 +323,27 @@ example.com:8443
 - ACME DNS 凭据、域名商 API Key、推送渠道都保存到 `/config`。
 - 凭据可在不同站点、监控项和证书申请流程中复用。
 - 敏感字段默认隐藏，可通过小眼睛按钮临时查看明文。
+
+## 扩展服务商（DNS / 域名商）
+
+后端把 provider 的接入信息集中在一张注册表（`backend/providers.go`），
+新增一家 DNS 服务商或域名商只需要在 `providerSpecs` 里加一条，并补齐它自己的 API 调用函数；
+展示名、别名、字段校验、凭据复用分组、动态 DNS 配置渲染、ACME DNS-01 渲染、
+域名商到期查询与续期都由注册表驱动，前端凭据表单按后端下发的字段 schema 渲染。
+
+新增一家服务商的完整步骤：
+
+1. `backend/providers.go`：在 `providerSpecs` 增加条目（`Fields`、`MissingErr`、`renderACMEDNS`、
+   `renderDDNS`、`syncHost` / `syncTarget`、`fetchExpiry` / `renewDomain` 按需）。
+2. `Dockerfile`：为 `xcaddy build` 增加对应的 `--with github.com/caddy-dns/<provider>` 模块。
+3. API 客户端：新增该服务商的记录读写函数，base URL 使用包级变量以便测试注入。
+4. 测试：`backend/providers_test.go` 的注册表守卫用例会自动覆盖新条目；
+   记录读写按现有 `httptest` 模式补用例。
+5. 前端无需改动 provider 分支，只需按需补充文案。
+
+前端可通过 `GET /caddy/providers` 获取全部 provider 的字段 schema
+（`id`、`name`、`dns`、`ddns`、`registrar`、`renewable`、`fields`、`credentials`），
+`GET /caddy/certificates/dns-providers` 则只返回可用于 DNS 凭据的服务商。
 
 ## 持久化目录
 
@@ -367,8 +401,22 @@ Dockerfile 分为四个阶段：
 
 - `github.com/caddy-dns/alidns`
 - `github.com/caddy-dns/cloudflare`
-- `github.com/caddy-dns/dnspod`
+- `github.com/caddy-dns/dnspod`（固定到 `fb7cc31c` 并打 `patches/dnspod-patched.go`）
 - `github.com/caddy-dns/he`
+- `github.com/caddy-dns/huaweicloud`
+- `github.com/caddy-dns/rfc2136`
+- `github.com/caddy-dns/duckdns`
+- `github.com/caddy-dns/dynu`
+- `github.com/caddy-dns/namecheap`
+- `github.com/caddy-dns/porkbun`
+- `github.com/caddy-dns/desec`
+- `github.com/caddy-dns/route53`
+- `github.com/caddy-dns/hetzner`
+- `github.com/caddy-dns/gandi`
+- `github.com/caddy-dns/ovh`
+- `github.com/caddy-dns/scaleway`
+- `github.com/caddy-dns/linode`
+- `github.com/caddy-dns/godaddy`
 - `github.com/mholt/caddy-l4`
 - `github.com/mholt/caddy-dynamicdns`
 - `github.com/corazawaf/coraza-caddy/v2`

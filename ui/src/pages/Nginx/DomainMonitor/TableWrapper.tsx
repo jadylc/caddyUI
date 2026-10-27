@@ -3,9 +3,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import { checkDomainMonitor, deleteDomainMonitor, renewDomainMonitor, toggleDomainMonitor } from "src/api/backend";
-import type { CredentialSummary, DomainMonitor } from "src/api/backend/models";
+import type { CredentialSummary, DomainMonitor, ProviderSpec } from "src/api/backend/models";
 import { Button, HasPermission, LoadingPage } from "src/components";
-import { useCredentials, useDomainMonitors } from "src/hooks";
+import { useCredentials, useDomainMonitors, useProviders } from "src/hooks";
 import { T } from "src/locale";
 import { showDeleteConfirmModal, showDomainMonitorModal, showHelpModal } from "src/modals";
 import { CERTIFICATES, MANAGE } from "src/modules/Permissions";
@@ -17,6 +17,7 @@ export default function TableWrapper() {
 	const [search, setSearch] = useState("");
 	const { isFetching, isLoading, isError, error, data } = useDomainMonitors();
 	const { data: credentials } = useCredentials();
+	const { data: providers } = useProviders();
 
 	if (isLoading) return <LoadingPage />;
 	if (isError) return <Alert variant="danger">{error?.message || "Unknown error"}</Alert>;
@@ -68,12 +69,17 @@ export default function TableWrapper() {
 		search && data
 			? data.filter((item) => `${item.name} ${item.domainNames.join(" ")}`.toLowerCase().includes(search))
 			: null;
-	const dnsheCredentialIds = new Set(
+	const renewableProviderIds = new Set(
+		(providers || [])
+			.filter((item: ProviderSpec) => item.registrar && item.renewable)
+			.map((item: ProviderSpec) => item.id),
+	);
+	const renewCredentialIds = new Set(
 		(credentials || [])
-			.filter((item: CredentialSummary) => item.provider === "dnshe")
+			.filter((item: CredentialSummary) => renewableProviderIds.has(item.provider))
 			.map((item: CredentialSummary) => item.id),
 	);
-	const canRenew = (item: DomainMonitor) => !!item.credentialId && dnsheCredentialIds.has(item.credentialId);
+	const canRenew = (item: DomainMonitor) => !!item.credentialId && renewCredentialIds.has(item.credentialId);
 
 	return (
 		<div className="card mt-4">
