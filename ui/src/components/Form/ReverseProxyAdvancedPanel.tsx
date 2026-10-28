@@ -1,13 +1,14 @@
 import { IconPlus, IconTrash } from "@tabler/icons-react";
 import cn from "classnames";
 import { Field, getIn, useFormikContext } from "formik";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import type {
 	ErrorResponseTemplate,
 	ProxyHeaderRule,
 	ReverseProxyAdvancedConfig,
 	ReverseProxyInterceptionRule,
 } from "src/api/backend";
+import { testHealthCheck } from "src/api/backend";
 import { useErrorResponseTemplates } from "src/hooks";
 
 interface Props {
@@ -670,6 +671,61 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 	const upstreamsPath = ownerPath ? `${ownerPath}.upstreams` : "upstreams";
 	const forwardSchemePath = ownerPath ? `${ownerPath}.forwardScheme` : "forwardScheme";
 	const upstreams = Array.isArray(getIn(values, upstreamsPath)) ? getIn(values, upstreamsPath) : [];
+
+	// 健康检查探测：保存前确认该路径真的返回健康状态。
+	// 主动健康检查指向非 2xx 路径时会按间隔持续产生错误日志，长时间可累积几十万条。
+	const [healthProbe, setHealthProbe] = useState<{
+		state: "idle" | "running" | "done";
+		ok?: boolean;
+		message?: string;
+	}>({ state: "idle" });
+
+	const probeTarget = (() => {
+		const list = Array.isArray(upstreams) ? upstreams : [];
+		const first: any = list[0] || {};
+		const hostPath = ownerPath ? `${ownerPath}.forwardHost` : "forwardHost";
+		const portPath = ownerPath ? `${ownerPath}.forwardPort` : "forwardPort";
+		const scheme =
+			cleanString(first.forwardScheme) || cleanString(getIn(values, forwardSchemePath)) || "http";
+		const host = cleanString(first.forwardHost) || cleanString(getIn(values, hostPath));
+		const port = Number(first.forwardPort || getIn(values, portPath) || 0);
+		if (!host) {
+			return "";
+		}
+		return `${scheme}://${host}${port > 0 ? `:${port}` : ""}`;
+	})();
+
+	const runHealthProbe = async () => {
+		if (!probeTarget) {
+			setHealthProbe({
+				state: "done",
+				ok: false,
+				message: "请先填写上游地址（主机与端口）",
+			});
+			return;
+		}
+		setHealthProbe({ state: "running" });
+		try {
+			const result = await testHealthCheck({
+				upstream: probeTarget,
+				uri: cleanString(cfg.healthCheck?.uri),
+				status: cleanString(cfg.healthCheck?.status),
+				timeout: cleanString(cfg.healthCheck?.timeout) || "5s",
+			});
+			setHealthProbe({
+				state: "done",
+				ok: !!result.ok,
+				message: result.message || result.error || "",
+			});
+		} catch (err: any) {
+			setHealthProbe({
+				state: "done",
+				ok: false,
+				message: err?.message || "探测失败",
+			});
+		}
+	};
+
 	const hasHTTPSUpstream =
 		upstreams.some((upstream: any) => upstream?.forwardScheme === "https") ||
 		(!upstreams.length && getIn(values, forwardSchemePath) === "https");
@@ -726,6 +782,29 @@ export function ReverseProxyAdvancedPanel({ name = "reverseProxy", compact = fal
 										label="检查路径"
 										placeholder="/healthz"
 									/>
+									<div className="mt-2">
+										<button
+											type="button"
+											className="btn btn-sm btn-outline-secondary"
+											disabled={healthProbe.state === "running"}
+											onClick={runHealthProbe}
+										>
+											{healthProbe.state === "running" ? "探测中…" : "测试健康检查"}
+										</button>
+									</div>
+									{healthProbe.state === "done" ? (
+										<small
+											className={
+												healthProbe.ok ? "text-success d-block mt-1" : "text-danger d-block mt-1"
+											}
+										>
+											{healthProbe.message}
+										</small>
+									) : (
+										<small className="text-muted d-block mt-1">
+											保存前建议先测试：路径返回非 2xx 会持续产生错误日志。
+										</small>
+									)}
 								</div>
 								<div className="col-md-3">
 									<SelectField

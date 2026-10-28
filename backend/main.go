@@ -551,6 +551,7 @@ func newAPIMux() *http.ServeMux {
 	mux.HandleFunc("/", npmHealthHandler)
 	mux.HandleFunc("/reports/hosts", npmHostReportHandler)
 	mux.HandleFunc("/caddy/proxy-hosts", npmProxyHostsHandler)
+	mux.HandleFunc("/caddy/proxy-hosts/health-check/test", npmHealthCheckTestHandler)
 	mux.HandleFunc("/caddy/proxy-hosts/", npmProxyHostItemHandler)
 	mux.HandleFunc("/caddy/static-hosts", npmStaticHostsHandler)
 	mux.HandleFunc("/caddy/static-hosts/", npmStaticHostItemHandler)
@@ -588,6 +589,7 @@ func newAPIMux() *http.ServeMux {
 	mux.HandleFunc("/caddy/notifications/channels", notificationChannelsHandler)
 	mux.HandleFunc("/caddy/notifications/channels/", notificationChannelItemHandler)
 	mux.HandleFunc("/nginx/proxy-hosts", npmProxyHostsHandler)
+	mux.HandleFunc("/nginx/proxy-hosts/health-check/test", npmHealthCheckTestHandler)
 	mux.HandleFunc("/nginx/proxy-hosts/", npmProxyHostItemHandler)
 	mux.HandleFunc("/nginx/static-hosts", npmStaticHostsHandler)
 	mux.HandleFunc("/nginx/static-hosts/", npmStaticHostItemHandler)
@@ -676,7 +678,12 @@ func startupMigrate() error {
 	}
 
 	// 用最新凭据全量重新渲染 site .conf
-	return renderAllSiteConfs(creds)
+	if err := renderAllSiteConfs(creds); err != nil {
+		return err
+	}
+	// 渲染完成后再巡检健康检查配置，把配错的情况写进日志（不阻塞启动）。
+	auditSiteHealthChecks()
+	return nil
 }
 
 func backfillSites(creds []Credential) error {
@@ -3486,11 +3493,28 @@ func reverseProxyTransportNeedsBlock(upstreams []ProxyUpstream, cfg ReverseProxy
 	return false
 }
 
+// caddyDefaultHealthURI 是 Caddy reverse_proxy 主动健康检查未配置 health_uri 时的默认路径。
+// 必须在渲染和检测两侧保持一致，否则会出现「配置实际生效、但工具以为没启用」的错配。
+const caddyDefaultHealthURI = "/"
+
+// effectiveHealthCheckURI 返回主动健康检查实际会请求的路径。
+// 未填路径时显式返回 Caddy 的默认值 "/"，而不是空串。
+func effectiveHealthCheckURI(cfg ReverseProxyHealthCheckConfig) string {
+	cfg = normalizeReverseProxyAdvancedConfig(ReverseProxyAdvancedConfig{HealthCheck: cfg}).HealthCheck
+	if !cfg.Enabled {
+		return ""
+	}
+	if cfg.URI == "" {
+		return caddyDefaultHealthURI
+	}
+	return cfg.URI
+}
+
 func writeReverseProxyHealthCheckDirectives(b *strings.Builder, cfg ReverseProxyHealthCheckConfig, indent string) {
 	if cfg.Enabled {
-		if cfg.URI != "" {
-			fmt.Fprintf(b, "%shealth_uri %s\n", indent, cfg.URI)
-		}
+		// 显式写出有效路径（未填时即 Caddy 默认的 "/"），
+		// 避免配置文件里看不到 health_uri、而 Caddy 却在探测 / 的隐藏行为。
+		fmt.Fprintf(b, "%shealth_uri %s\n", indent, effectiveHealthCheckURI(cfg))
 		if cfg.Interval != "" {
 			fmt.Fprintf(b, "%shealth_interval %s\n", indent, cfg.Interval)
 		}
@@ -5761,12 +5785,19 @@ func recoverOrphanCertificateRequests(creds []Credential) error {
 }
 
 func inferIssuerForDomain(domain string) IssuerConfig {
-	data, err := os.ReadFile(logFile)
-	if err == nil && strings.Contains(string(data), domain) && strings.Contains(string(data), "dv.acme-v02.api.pki.goog") {
-		if cfg, ok := loadSavedIssuerConfig("google"); ok {
-			return cfg
+	// 只需要在最近的日志里找线索，按尾部窗口扫描，
+	// 避免为了一个子串把数百 MB 的日志读进内存。
+	lines, err := tailFileLines(logFile, logTailDefaultMaxLines, logTailDefaultMaxBytes)
+	if err != nil {
+		return IssuerConfig{}
+	}
+	for _, line := range lines {
+		if strings.Contains(line, domain) && strings.Contains(line, "dv.acme-v02.api.pki.goog") {
+			if cfg, ok := loadSavedIssuerConfig("google"); ok {
+				return cfg
+			}
+			return IssuerConfig{Provider: "google"}
 		}
-		return IssuerConfig{Provider: "google"}
 	}
 	return IssuerConfig{}
 }
@@ -6340,6 +6371,134 @@ func probeHandler(w http.ResponseWriter, r *http.Request) {
 		results = append(results, res)
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+// healthStatusMatches 判断实际状态码是否符合 Caddy health_status 配置。
+// 未配置时按 Caddy 默认：2xx 视为健康。
+func healthStatusMatches(status int, expected string) bool {
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	if expected == "" {
+		return status >= 200 && status < 300
+	}
+	if reverseProxyStatusRe.MatchString(expected) {
+		want, _ := strconv.Atoi(expected)
+		return status == want
+	}
+	// 支持 Caddy 的 "2xx" / "3xx" 风格区间。
+	if len(expected) == 3 && expected[1] == 'x' && expected[2] == 'x' &&
+		expected[0] >= '1' && expected[0] <= '5' {
+		return status/100 == int(expected[0]-'0')
+	}
+	return false
+}
+
+// npmHealthCheckTestHandler 在保存前探测上游的健康检查路径。
+//
+// 主动健康检查一旦指向后端不返回 2xx 的路径，就会按检查间隔持续产生错误日志
+// （长时间累积可达几十万条，把日志和内存同时拖垮），但界面上看不出异常。
+// 这个接口让界面在保存前就能看到真实状态码，从源头避免配错。
+func npmHealthCheckTestHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Upstream string `json:"upstream"`
+		URI      string `json:"uri"`
+		Status   string `json:"status"`
+		Timeout  string `json:"timeout"`
+		Host     string `json:"host"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	rawUpstream := strings.TrimSpace(req.Upstream)
+	if rawUpstream == "" {
+		http.Error(w, "上游地址不能为空", http.StatusBadRequest)
+		return
+	}
+	clean, upstreamPath := sanitizeBackendURL(rawUpstream)
+	if !strings.Contains(clean, "://") {
+		clean = "http://" + clean
+	}
+	base, err := url.Parse(clean)
+	if err != nil || base.Host == "" {
+		http.Error(w, "上游地址无效："+rawUpstream, http.StatusBadRequest)
+		return
+	}
+
+	uri := strings.TrimSpace(req.URI)
+	if uri == "" {
+		uri = caddyDefaultHealthURI
+	}
+	if !strings.HasPrefix(uri, "/") || hasControlChars(uri) {
+		http.Error(w, "检查路径必须以 / 开头且不能包含控制字符", http.StatusBadRequest)
+		return
+	}
+
+	timeout := 5 * time.Second
+	if v := strings.TrimSpace(req.Timeout); v != "" {
+		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
+			timeout = d
+		}
+	}
+	if timeout > 30*time.Second {
+		timeout = 30 * time.Second
+	}
+
+	probeURL := base.Scheme + "://" + base.Host + strings.TrimRight(upstreamPath, "/") + uri
+	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, probeURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httpReq.Header.Set("User-Agent", "my-caddy-ui/1.0 health-check-probe")
+	if host := strings.TrimSpace(req.Host); host != "" {
+		if hasControlChars(host) {
+			http.Error(w, "Host 头不能包含控制字符", http.StatusBadRequest)
+			return
+		}
+		// 后端常按 Host 路由，探测时带上站点域名更接近真实健康检查。
+		httpReq.Host = host
+	}
+
+	expected := strings.TrimSpace(req.Status)
+	result := map[string]any{
+		"url":      probeURL,
+		"expected": expected,
+		"timeout":  timeout.String(),
+	}
+
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		result["ok"] = false
+		result["error"] = err.Error()
+		result["message"] = "无法连接上游：" + err.Error()
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+
+	status := resp.StatusCode
+	healthy := healthStatusMatches(status, expected)
+	result["status"] = status
+	result["ok"] = healthy
+	if healthy {
+		result["message"] = fmt.Sprintf("健康检查路径返回 %d，配置可用", status)
+	} else if expected == "" {
+		result["message"] = fmt.Sprintf(
+			"健康检查路径返回 %d，不是 2xx；Caddy 会把它判为不健康并持续产生错误日志",
+			status)
+	} else {
+		result["message"] = fmt.Sprintf(
+			"健康检查路径返回 %d，与期望的 %s 不符；Caddy 会把它判为不健康并持续产生错误日志",
+			status, expected)
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // ============================================================
@@ -8865,16 +9024,14 @@ func handleSiteAccessLogRequest(w http.ResponseWriter, r *http.Request, s Site, 
 }
 
 func readSiteAccessLogLines(caddyPath string, n int) ([]string, error) {
-	data, err := os.ReadFile(filepath.FromSlash(caddyPath))
+	// 访问日志可能被公网扫描灌到很大（例如站点直接暴露在公网），
+	// 只读取尾部窗口，避免每个站点一次全量读把内存打满。
+	lines, err := tailFileLines(filepath.FromSlash(caddyPath), n, logTailDefaultMaxBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []string{}, nil
 		}
 		return nil, err
-	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
 	}
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -8887,16 +9044,21 @@ func readSiteAccessLogLines(caddyPath string, n int) ([]string, error) {
 }
 
 func downloadSiteAccessLog(w http.ResponseWriter, cfg AccessLogConfig, objectLabel string, id int) {
-	data, err := os.ReadFile(filepath.FromSlash(cfg.OutputFile))
-	if err != nil && !os.IsNotExist(err) {
+	f, err := os.Open(filepath.FromSlash(cfg.OutputFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%d-access.log"`, objectLabel, id))
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer f.Close()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%d-access.log"`, objectLabel, id))
-	if len(data) > 0 {
-		_, _ = w.Write(data)
-	}
+	// 直接流式拷贝，避免把整个访问日志读进内存。
+	_, _ = io.Copy(w, f)
 }
 
 func saveSiteFromNPM(s Site) error {
@@ -12046,7 +12208,8 @@ func wafAuditHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	hostFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("host")))
 
-	data, err := os.ReadFile(wafAuditLogPath)
+	// WAF 审计日志同样限制在尾部窗口内，避免全量读进内存。
+	auditLines, err := tailFileLines(wafAuditLogPath, logTailDefaultMaxLines, logTailDefaultMaxBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeJSON(w, http.StatusOK, map[string]any{"total": 0, "items": []any{}})
@@ -12056,7 +12219,7 @@ func wafAuditHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := []wafAuditEntry{}
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range auditLines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -13623,8 +13786,56 @@ func activeHealthCheckUpstreams(sites []Site) map[string]bool {
 }
 
 func reverseProxyActiveHealthCheckEnabled(cfg ReverseProxyHealthCheckConfig) bool {
-	cfg = normalizeReverseProxyAdvancedConfig(ReverseProxyAdvancedConfig{HealthCheck: cfg}).HealthCheck
-	return cfg.Enabled && cfg.URI != ""
+	// 用有效路径判断，与渲染侧保持一致：
+	// 未填路径时 Caddy 仍会探测 "/"，这类历史配置同样算「已启用主动健康检查」。
+	return effectiveHealthCheckURI(cfg) != ""
+}
+
+// auditSiteHealthChecks 启动时巡检各站点的主动健康检查配置。
+//
+// 目的：健康检查一旦配错会持续产生错误日志（例如后端不返回 2xx 时每 30s 一条），
+// 但界面上看不出异常。这里把可疑配置直接写进启动日志，让管理员能立刻定位。
+func auditSiteHealthChecks() {
+	sites, err := readAllSites()
+	if err != nil {
+		return
+	}
+	warned := 0
+	auditOne := func(site Site, cfg ReverseProxyHealthCheckConfig, scope string) {
+		if !cfg.Enabled {
+			return
+		}
+		warned++
+		raw := strings.TrimSpace(cfg.URI)
+		if raw == "" {
+			log.Printf("warn: 站点 %s%s 启用了主动健康检查但未填检查路径，Caddy 会使用默认路径 %s；"+
+				"若该路径不返回 2xx 将每 %s 产生一条错误日志，请在反代高级里显式设置正确的健康端点",
+				site.Name, scope, caddyDefaultHealthURI, firstNonEmpty(strings.TrimSpace(cfg.Interval), "30s"))
+			return
+		}
+		if raw == caddyDefaultHealthURI {
+			log.Printf("warn: 站点 %s%s 的主动健康检查路径为 %s，多数后端在根路径返回 404/401；"+
+				"请确认该路径确实返回 2xx，或改用一个专用的健康端点为避免持续产生错误日志",
+				site.Name, scope, caddyDefaultHealthURI)
+		}
+	}
+	for _, site := range sites {
+		if site.Disabled || defaultString(site.Kind, "proxy") != "proxy" {
+			continue
+		}
+		auditOne(site, site.ReverseProxy.HealthCheck, "")
+		for _, loc := range site.Locations {
+			advanced := site.ReverseProxy
+			if loc.ReverseProxyMode == "custom" {
+				advanced = loc.ReverseProxy
+			}
+			path := strings.TrimSpace(loc.Path)
+			auditOne(site, advanced.HealthCheck, fmt.Sprintf(" 路径规则 %s", defaultString(path, "/")))
+		}
+	}
+	if warned > 0 {
+		log.Printf("主动健康检查巡检完成：共 %d 项，建议用「测试健康检查」确认路径返回 2xx", warned)
+	}
 }
 
 func addObservedUpstreams(out map[string]bool, upstreams []ProxyUpstream) {
@@ -13781,11 +13992,12 @@ func formatAccessLogErrorMessage(obs accessLogObservation) string {
 }
 
 func readRuntimeLogEvents(limit int, now time.Time, window time.Duration) []observabilityLogEvent {
-	data, err := os.ReadFile(logFile)
+	// 只扫描日志尾部窗口：caddy.log 可能长达数百 MB，
+	// 全量读取并 Split 会让观测页面直接把内存打满。
+	lines, err := tailFileLines(logFile, logTailDefaultMaxLines, logTailDefaultMaxBytes)
 	if err != nil {
 		return []observabilityLogEvent{}
 	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	out := []observabilityLogEvent{}
 	for _, line := range lines {
 		if ev, ok := parseRuntimeLogEvent(line); ok {
@@ -14296,7 +14508,8 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 	if s := r.URL.Query().Get("n"); s != "" {
 		fmt.Sscanf(s, "%d", &n)
 	}
-	data, err := os.ReadFile(logFile)
+	// 只读取尾部 n 行，不再全量加载整个日志文件。
+	lines, err := tailFileLines(logFile, n, logTailDefaultMaxBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeJSON(w, http.StatusOK, []string{})
@@ -14304,10 +14517,6 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
 	}
 	for i, line := range lines {
 		line = strings.TrimSpace(line)

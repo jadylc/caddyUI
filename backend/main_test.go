@@ -354,11 +354,30 @@ func TestActiveHealthCheckUpstreamsUsesSiteAndCustomLocationConfig(t *testing.T)
 	if !checked["10.0.0.1:8080"] {
 		t.Fatalf("checked = %#v, want site upstream", checked)
 	}
-	if checked["10.0.0.2:8080"] {
-		t.Fatalf("checked = %#v, custom location without health URI should not be active", checked)
+	// 自定义路径只开了开关、没填路径时，Caddy 仍会按默认 "/" 探测该上游，
+	// 因此必须算作「已启用主动健康检查」。旧实现认为它不生效，
+	// 导致观测页面看不到这类健康检查（也正是配错后无人察觉的原因之一）。
+	if !checked["10.0.0.2:8080"] {
+		t.Fatalf("checked = %#v, custom location with health check enabled should be active (Caddy probes the default /)", checked)
 	}
 	if !checked["10.0.0.3:8080"] {
 		t.Fatalf("checked = %#v, want custom location upstream", checked)
+	}
+}
+
+func TestActiveHealthCheckUpstreamsIgnoresDisabledHealthCheck(t *testing.T) {
+	sites := []Site{{
+		Name:    "app",
+		Kind:    "proxy",
+		Backend: "http://10.0.0.1:8080",
+		ReverseProxy: ReverseProxyAdvancedConfig{HealthCheck: ReverseProxyHealthCheckConfig{
+			Enabled: false,
+		}},
+	}}
+
+	checked := activeHealthCheckUpstreams(sites)
+	if checked["10.0.0.1:8080"] {
+		t.Fatalf("checked = %#v, 未启用主动健康检查时不应算作被检查", checked)
 	}
 }
 

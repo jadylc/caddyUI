@@ -80,6 +80,7 @@ export * from "./models";
 export * from "./renewCertificate";
 export * from "./renewDomainMonitor";
 export * from "./responseTypes";
+export * from "./testHealthCheck";
 export * from "./testHttpCertificate";
 export * from "./testNotificationChannel";
 export * from "./toggleDeadHost";
