@@ -683,6 +683,8 @@ func startupMigrate() error {
 	}
 	// 渲染完成后再巡检健康检查配置，把配错的情况写进日志（不阻塞启动）。
 	auditSiteHealthChecks()
+	// 日志体积异常同样需要提示，否则会持续拖慢观测读取。
+	warnIfLogFileTooLarge()
 	return nil
 }
 
@@ -4401,7 +4403,11 @@ func validateReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig, label st
 		if err := validateOptionalCaddyDuration(hc.Timeout, label+" 健康检查超时"); err != nil {
 			return err
 		}
-		if err := validateOptionalReverseProxyStatus(hc.Status, label+" 健康检查状态码"); err != nil {
+		if err := validateHealthCheckStatus(hc.Status, label+" 健康检查状态码"); err != nil {
+			return err
+		}
+		// 探测频率直接决定「路径配错时错误日志堆积的速度」，这里拦住两类放大配置。
+		if err := validateHealthCheckProbeSafety(hc, label); err != nil {
 			return err
 		}
 	}
@@ -4412,7 +4418,7 @@ func validateReverseProxyAdvancedConfig(cfg ReverseProxyAdvancedConfig, label st
 		if err := validateOptionalCaddyDuration(hc.FailDuration, label+" 被动失败窗口"); err != nil {
 			return err
 		}
-		if err := validateOptionalReverseProxyStatus(hc.UnhealthyStatus, label+" 被动失败状态码"); err != nil {
+		if err := validateHealthCheckStatus(hc.UnhealthyStatus, label+" 被动失败状态码"); err != nil {
 			return err
 		}
 	}
@@ -4576,15 +4582,46 @@ func validateOptionalCaddyDuration(value string, label string) error {
 	return nil
 }
 
-func validateOptionalReverseProxyStatus(value string, label string) error {
+// minHealthCheckInterval 是主动健康检查允许的最小间隔。
+// 间隔决定「路径配错时错误日志的堆积速率」：1s 间隔一天就是 8.6 万条。
+const minHealthCheckInterval = time.Second
+
+// validateHealthCheckProbeSafety 校验健康检查的探测频率组合。
+//
+// 两类配置会在检查路径配错时显著放大错误日志，这里直接拦在保存前：
+//   - 间隔过密：产生速率成倍上升；
+//   - 超时大于等于间隔：探测会首尾重叠，形成持续压力。
+func validateHealthCheckProbeSafety(cfg ReverseProxyHealthCheckConfig, label string) error {
+	intervalText := strings.TrimSpace(cfg.Interval)
+	timeoutText := strings.TrimSpace(cfg.Timeout)
+	interval, intervalErr := time.ParseDuration(intervalText)
+	timeout, timeoutErr := time.ParseDuration(timeoutText)
+
+	if intervalText != "" && intervalErr == nil && interval < minHealthCheckInterval {
+		return fmt.Errorf("%s 的健康检查间隔不能小于 %s，过密探测会在路径配错时快速堆积日志",
+			label, minHealthCheckInterval)
+	}
+	if intervalText != "" && timeoutText != "" && intervalErr == nil && timeoutErr == nil && timeout >= interval {
+		return fmt.Errorf("%s 的健康检查超时（%s）必须小于检查间隔（%s），否则探测会重叠执行",
+			label, timeoutText, intervalText)
+	}
+	return nil
+}
+
+// validateHealthCheckStatus 校验健康检查的状态码或区间。
+// Caddy 的 health_status 支持精确码（200）与 2xx 风格区间，两者都接受。
+func validateHealthCheckStatus(value string, label string) error {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
 		return nil
 	}
-	if !reverseProxyStatusRe.MatchString(value) {
-		return fmt.Errorf("%s 必须是三位 HTTP 状态码，例如 200、204、503", label)
+	if reverseProxyStatusRe.MatchString(value) {
+		return nil
 	}
-	return nil
+	if len(value) == 3 && value[1] == 'x' && value[2] == 'x' && value[0] >= '1' && value[0] <= '5' {
+		return nil
+	}
+	return fmt.Errorf("%s 必须是三位状态码（如 200）或区间（如 2xx）", label)
 }
 
 func validateProxyHeaderRules(rules []ProxyHeaderRule, label string) error {
@@ -13374,6 +13411,18 @@ type observabilityOverview struct {
 	Sites        []observabilitySite     `json:"sites"`
 	RecentErrors []observabilityLogEvent `json:"recent_errors"`
 	ErrorTrend   observabilityErrorTrend `json:"error_trend"`
+	// HealthAlerts 是运行时识别出的「主动健康检查持续失败」信号。
+	HealthAlerts []observabilityHealthAlert `json:"health_alerts,omitempty"`
+	// Warnings 是需要管理员处理的配置/运维问题（可疑健康检查、日志过大等）。
+	Warnings         []string `json:"warnings,omitempty"`
+	LogFileSizeBytes int64    `json:"log_file_size_bytes,omitempty"`
+}
+
+// observabilityHealthAlert 一条健康检查异常告警。
+type observabilityHealthAlert struct {
+	Target string `json:"target"`
+	Count  int    `json:"count"`
+	Hint   string `json:"hint"`
 }
 
 type observabilityReload struct {
@@ -13495,6 +13544,22 @@ func collectObservabilityOverview(now time.Time) observabilityOverview {
 	allErrors := mergeObservabilityErrors(runtimeErrors, overview.Sites, now, 24*time.Hour)
 	overview.ErrorTrend = buildErrorTrend(allErrors, now)
 	overview.RecentErrors = limitObservabilityLogEvents(allErrors, 20)
+
+	// 运行时要能看出「配错」而不只是「不健康」：健康检查持续失败 = 可能路径配错。
+	overview.HealthAlerts = buildHealthCheckAlerts(runtimeErrors, healthCheckAlertMinCount)
+	// 配置层面的可疑项（含历史遗留配置，它们不会走保存校验）。
+	if len(sites) > 0 {
+		overview.Warnings = append(overview.Warnings, siteHealthCheckWarnings(sites)...)
+	}
+	// 日志体积异常是「错误日志堆积」最直接的后果，一并暴露。
+	if size, sizeErr := logFileSizeBytes(); sizeErr == nil {
+		overview.LogFileSizeBytes = size
+		if size >= logFileSizeWarnBytes {
+			overview.Warnings = append(overview.Warnings, fmt.Sprintf(
+				"caddy.log 已达 %.1f MB，建议截断或配置日志轮转，避免磁盘占用与读取开销持续增长",
+				float64(size)/(1<<20)))
+		}
+	}
 	return overview
 }
 
@@ -13795,47 +13860,150 @@ func reverseProxyActiveHealthCheckEnabled(cfg ReverseProxyHealthCheckConfig) boo
 //
 // 目的：健康检查一旦配错会持续产生错误日志（例如后端不返回 2xx 时每 30s 一条），
 // 但界面上看不出异常。这里把可疑配置直接写进启动日志，让管理员能立刻定位。
-func auditSiteHealthChecks() {
-	sites, err := readAllSites()
-	if err != nil {
-		return
-	}
-	warned := 0
-	auditOne := func(site Site, cfg ReverseProxyHealthCheckConfig, scope string) {
+// siteHealthCheckWarnings 返回主动健康检查配置的可疑项。
+//
+// 纯函数，供启动巡检和运行观测页共用：配置生效了却没人知道，
+// 是「配错后错误日志堆积几十万条」的根因。
+func siteHealthCheckWarnings(sites []Site) []string {
+	out := []string{}
+	collect := func(site Site, cfg ReverseProxyHealthCheckConfig, scope string) {
 		if !cfg.Enabled {
 			return
 		}
-		warned++
+		label := fmt.Sprintf("站点 %s%s", site.Name, scope)
 		raw := strings.TrimSpace(cfg.URI)
 		if raw == "" {
-			log.Printf("warn: 站点 %s%s 启用了主动健康检查但未填检查路径，Caddy 会使用默认路径 %s；"+
-				"若该路径不返回 2xx 将每 %s 产生一条错误日志，请在反代高级里显式设置正确的健康端点",
-				site.Name, scope, caddyDefaultHealthURI, firstNonEmpty(strings.TrimSpace(cfg.Interval), "30s"))
+			out = append(out, fmt.Sprintf(
+				"%s 启用了主动健康检查但未填检查路径，Caddy 会使用默认路径 %s；若该路径不返回 2xx 将每 %s 产生一条错误日志",
+				label, caddyDefaultHealthURI,
+				firstNonEmpty(strings.TrimSpace(cfg.Interval), "30s")))
 			return
 		}
 		if raw == caddyDefaultHealthURI {
-			log.Printf("warn: 站点 %s%s 的主动健康检查路径为 %s，多数后端在根路径返回 404/401；"+
-				"请确认该路径确实返回 2xx，或改用一个专用的健康端点为避免持续产生错误日志",
-				site.Name, scope, caddyDefaultHealthURI)
+			out = append(out, fmt.Sprintf(
+				"%s 的主动健康检查路径为 %s，多数后端在根路径返回 404/401，请确认该路径返回 2xx",
+				label, caddyDefaultHealthURI))
+		}
+		if err := validateHealthCheckProbeSafety(cfg, label); err != nil {
+			out = append(out, err.Error())
 		}
 	}
 	for _, site := range sites {
 		if site.Disabled || defaultString(site.Kind, "proxy") != "proxy" {
 			continue
 		}
-		auditOne(site, site.ReverseProxy.HealthCheck, "")
+		collect(site, site.ReverseProxy.HealthCheck, "")
 		for _, loc := range site.Locations {
 			advanced := site.ReverseProxy
 			if loc.ReverseProxyMode == "custom" {
 				advanced = loc.ReverseProxy
 			}
 			path := strings.TrimSpace(loc.Path)
-			auditOne(site, advanced.HealthCheck, fmt.Sprintf(" 路径规则 %s", defaultString(path, "/")))
+			collect(site, advanced.HealthCheck, fmt.Sprintf(" 路径规则 %s", defaultString(path, "/")))
 		}
 	}
-	if warned > 0 {
-		log.Printf("主动健康检查巡检完成：共 %d 项，建议用「测试健康检查」确认路径返回 2xx", warned)
+	return out
+}
+
+func auditSiteHealthChecks() {
+	sites, err := readAllSites()
+	if err != nil {
+		return
 	}
+	warnings := siteHealthCheckWarnings(sites)
+	for _, warning := range warnings {
+		log.Printf("warn: %s", warning)
+	}
+	if len(warnings) > 0 {
+		log.Printf("主动健康检查巡检：%d 项可疑配置，建议用「测试健康检查」确认路径返回 2xx", len(warnings))
+	}
+}
+
+// logFileSizeWarnBytes 是 caddy.log 的体积告警阈值。
+// 日志被健康检查失败或公网扫描灌大后，磁盘与读取开销都会持续增长。
+// 声明为变量以便测试注入更小的阈值。
+var logFileSizeWarnBytes = int64(64 << 20) // 64MB
+
+func logFileSizeBytes() (int64, error) {
+	info, err := os.Stat(logFile)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+// warnIfLogFileTooLarge 启动时提示日志体积异常，让管理员能及时截断或加轮转。
+func warnIfLogFileTooLarge() {
+	size, err := logFileSizeBytes()
+	if err != nil || size < logFileSizeWarnBytes {
+		return
+	}
+	log.Printf("warn: caddy.log 已达 %.1f MB，建议截断（: > %s）并配置日志轮转，"+
+		"避免磁盘占用与观测读取开销持续增长", float64(size)/(1<<20), logFile)
+}
+
+// healthCheckFailureSignatures 是 Caddy 主动健康检查失败时的日志特征。
+// 归一化到小写后做子串匹配。
+var healthCheckFailureSignatures = []string{
+	"status code out of tolerances",
+	"health check failed",
+	"healthcheck failed",
+	"failed health check",
+}
+
+// healthCheckAlertMinCount 是生成告警所需的最少失败次数，避免偶发失败刷屏。
+const healthCheckAlertMinCount = 3
+
+func isHealthCheckFailureMessage(message string) bool {
+	lower := strings.ToLower(message)
+	for _, sig := range healthCheckFailureSignatures {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildHealthCheckAlerts 从最近的运行时日志里识别「主动健康检查持续失败」。
+//
+// 这类信号通常意味着检查路径配错（例如指向后端不存在的路径）：
+// Caddy 会按检查间隔持续探测、持续产生错误日志，而界面上只看得到「上游不健康」。
+// 把它单独拎出来，是为了让管理员直接看到「路径可能配错了」这个结论。
+func buildHealthCheckAlerts(events []observabilityLogEvent, minCount int) []observabilityHealthAlert {
+	counts := map[string]int{}
+	order := []string{}
+	for _, ev := range events {
+		if !isHealthCheckFailureMessage(ev.Message) {
+			continue
+		}
+		target := strings.TrimSpace(ev.Upstream)
+		if target == "" {
+			target = strings.TrimSpace(ev.Host)
+		}
+		if target == "" {
+			target = "未知上游"
+		}
+		if counts[target] == 0 {
+			order = append(order, target)
+		}
+		counts[target]++
+	}
+
+	out := []observabilityHealthAlert{}
+	for _, target := range order {
+		if counts[target] < minCount {
+			continue
+		}
+		out = append(out, observabilityHealthAlert{
+			Target: target,
+			Count:  counts[target],
+			Hint: "主动健康检查持续失败，检查路径可能配置错误；" +
+				"Caddy 会按检查间隔持续产生错误日志，请用「测试健康检查」确认该路径返回 2xx",
+		})
+	}
+	// 失败次数多的排前面。
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
 }
 
 func addObservedUpstreams(out map[string]bool, upstreams []ProxyUpstream) {

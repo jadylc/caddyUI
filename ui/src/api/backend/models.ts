@@ -329,6 +329,13 @@ export interface ObservabilitySite {
 	recentErrors?: ObservabilityLogEvent[];
 }
 
+// ObservabilityHealthAlert 运行时识别出的「主动健康检查持续失败」信号。
+export interface ObservabilityHealthAlert {
+	target: string;
+	count: number;
+	hint: string;
+}
+
 export interface ObservabilityOverview {
 	collectedAt: string;
 	available: boolean;
@@ -339,6 +346,10 @@ export interface ObservabilityOverview {
 	sites: ObservabilitySite[];
 	recentErrors: ObservabilityLogEvent[];
 	errorTrend: ObservabilityErrorTrend;
+	// 需要管理员处理的配置/运维问题（可疑健康检查、日志过大等）。
+	healthAlerts?: ObservabilityHealthAlert[];
+	warnings?: string[];
+	logFileSizeBytes?: number;
 }
 
 export interface AutheliaSettings {

@@ -293,6 +293,30 @@ export default function ObservabilityPage() {
 				<Alert variant="warning">运行指标暂不可用：{data.error || "无法读取运行指标"}</Alert>
 			) : null}
 
+			{data.healthAlerts?.length ? (
+				<div className="mb-3">
+					{data.healthAlerts.map((alert) => (
+						<Alert variant="danger" key={alert.target} className="mb-2">
+							<div className="fw-semibold">
+								上游 {alert.target} 的主动健康检查持续失败（最近 24 小时命中 {alert.count} 次）
+							</div>
+							<div className="small mt-1">{alert.hint}</div>
+						</Alert>
+					))}
+				</div>
+			) : null}
+
+			{data.warnings?.length ? (
+				<Alert variant="warning" className="mb-3">
+					<div className="fw-semibold mb-1">需要处理的配置问题</div>
+					<ul className="mb-0 ps-3 small">
+						{data.warnings.map((warning) => (
+							<li key={warning}>{warning}</li>
+						))}
+					</ul>
+				</Alert>
+			) : null}
+
 			<div className="row row-cards mb-3">
 				<MetricCard
 					title="业务 QPS"
