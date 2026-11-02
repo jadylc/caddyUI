@@ -24,6 +24,7 @@ jobs:
         id: version
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
@@ -36,6 +37,18 @@ jobs:
             exit 1
           fi
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
+
+          # 正式版本（不带预发布后缀）才推进 latest；
+          # v1.2.0-unstable.N 这类预发布构建只推带版本号的 tag，
+          # 避免把未验证的镜像推给使用 :latest 的部署。
+          {
+            echo "tags<<TAGS_EOF"
+            echo "${DOCKERHUB_USERNAME}/caddy-ui:${VERSION}"
+            if ! printf '%s' "$VERSION" | grep -q '-'; then
+              echo "${DOCKERHUB_USERNAME}/caddy-ui:latest"
+            fi
+            echo "TAGS_EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -55,7 +68,7 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-ui:${{ steps.version.outputs.tag }}
+          tags: ${{ steps.version.outputs.tags }}
           build-args: |
             GOPROXY=https://proxy.golang.org|https://goproxy.cn|direct
             APP_VERSION=v${{ steps.version.outputs.tag }}
